@@ -33,8 +33,7 @@ def main() -> int:
     env.setdefault("LOG_LEVEL", "INFO")
 
     print("[local-runner] -----------------------------------------------")
-    print("[local-runner] Make sure Zookeeper and Kafka are running first!")
-    print("[local-runner]   Zookeeper: port 2181")
+    print("[local-runner] Make sure Kafka is running first!")
     print("[local-runner]   Kafka    : port 9092")
     print("[local-runner] -----------------------------------------------")
 

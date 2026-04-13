@@ -96,6 +96,15 @@ def list_tasks(status: Optional[str] = Query(default=None)) -> list[dict[str, An
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@app.delete("/tasks/clear")
+def clear_all_tasks() -> dict[str, Any]:
+    try:
+        deleted = db.clear_all_tasks()
+        return {"message": "All tasks cleared", "deleted": deleted}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @app.delete("/tasks/{task_id}")
 def cancel_task(task_id: str) -> dict[str, Any]:
     task = db.get_task(task_id)

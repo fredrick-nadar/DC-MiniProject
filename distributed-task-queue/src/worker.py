@@ -24,14 +24,37 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-TASK_HANDLERS: dict[str, tuple[int, float]] = {
-    "email_send": (2, 0.10),
-    "image_resize": (3, 0.15),
-    "data_export": (5, 0.20),
-    "report_gen": (4, 0.25),
-    "notification": (1, 0.05),
-}
+import requests
 
+# Heavy external APIs — variable response times, rate limits, and large payloads
+# These create realistic pressure on the worker cluster:
+#   - Nominatim enforces 1 req/sec → concurrent workers get 429 errors
+#   - Wikipedia returns huge payloads → slower parse, higher timeout risk
+#   - Open Library search returns large paginated JSON
+API_ENDPOINTS: dict[str, dict] = {
+    "fetch_weather": {
+        "url": "https://api.open-meteo.com/v1/forecast?latitude=19.07&longitude=72.87&hourly=temperature_2m,relativehumidity_2m,windspeed_10m&forecast_days=7",
+        "timeout": 8,
+    },
+    "fetch_books": {
+        "url": "https://openlibrary.org/search.json?q=distributed+systems&fields=title,author_name,first_publish_year,number_of_pages_median&limit=20",
+        "timeout": 10,
+    },
+    "fetch_wiki": {
+        "url": "https://en.wikipedia.org/w/api.php?action=query&titles=Apache_Kafka&prop=extracts&exintro=true&format=json",
+        "timeout": 6,
+    },
+    "fetch_geocode": {
+        # Nominatim rate-limits at 1 req/sec — concurrent workers trigger 429 → retries!
+        "url": "https://nominatim.openstreetmap.org/search?q=Mumbai&format=json&limit=5",
+        "timeout": 5,
+        "headers": {"User-Agent": "DistributedTaskQueueDemo/1.0"},
+    },
+    "fetch_cocktail": {
+        "url": "https://www.thecocktaildb.com/api/json/v1/1/search.php?s=margarita",
+        "timeout": 7,
+    },
+}
 
 class WorkerNode:
     def __init__(self, worker_id: str | None = None) -> None:
@@ -53,12 +76,33 @@ class WorkerNode:
         thread.start()
         return thread
 
-    def _simulate_task(self, task_type: str, task_id: str) -> None:
-        duration, failure_rate = TASK_HANDLERS[task_type]
+    def _process_task(self, task_type: str, task_id: str, payload: dict) -> None:
         logger.info("Worker %s processing task %s type=%s", self.worker_id, task_id, task_type)
-        time.sleep(duration)
-        if random.random() < failure_rate:
-            raise RuntimeError(f"Simulated failure for task_type={task_type}")
+
+        if task_type not in API_ENDPOINTS:
+            raise ValueError(f"Unknown task type: {task_type}")
+
+        cfg = API_ENDPOINTS[task_type]
+        url = cfg["url"]
+        timeout = cfg.get("timeout", 8)
+        headers = cfg.get("headers", {})
+
+        try:
+            res = requests.get(url, timeout=timeout, headers=headers)
+            res.raise_for_status()
+            data = res.json()
+            size = len(str(data))
+            logger.info("Task %s (%s) completed — response size: %d bytes", task_id, task_type, size)
+        except requests.exceptions.Timeout:
+            raise RuntimeError(f"Timeout after {timeout}s calling {task_type}")
+        except requests.exceptions.HTTPError as e:
+            raise RuntimeError(f"HTTP {e.response.status_code} from {task_type}: {e}")
+        except requests.RequestException as e:
+            raise RuntimeError(f"Request failed for {task_type}: {e}")
+
+        # 15% random crash to demonstrate worker failures in the dashboard
+        if random.random() < 0.15:
+            raise RuntimeError(f"Worker crashed randomly while processing {task_type}")
 
     def run(self) -> None:
         logger.info("Starting worker_id=%s", self.worker_id)
@@ -102,7 +146,7 @@ class WorkerNode:
                 )
 
                 try:
-                    self._simulate_task(task["task_type"], task_id)
+                    self._process_task(task["task_type"], task_id, task)
                     done_at = time.time()
                     self.db.update_task(
                         task_id,

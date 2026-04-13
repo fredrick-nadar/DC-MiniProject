@@ -359,3 +359,22 @@ class Database:
             "in_progress": in_progress,
             "delayed": delayed,
         }
+
+    def clear_all_tasks(self) -> int:
+        """Delete all tasks and related data. Returns count of tasks deleted."""
+        with self._lock, self._connect() as conn:
+            count = conn.execute("SELECT COUNT(*) AS c FROM tasks").fetchone()["c"]
+            conn.executescript(
+                """
+                DELETE FROM tasks;
+                DELETE FROM retry_history;
+                DELETE FROM system_events;
+                DELETE FROM delayed_tasks;
+                DELETE FROM task_locks;
+                DELETE FROM worker_heartbeats;
+                DELETE FROM sqlite_sequence;
+                """
+            )
+            conn.commit()
+        return count
+

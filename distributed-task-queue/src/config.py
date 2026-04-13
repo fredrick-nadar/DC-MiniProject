@@ -57,9 +57,9 @@ TERMINAL_STATUSES = {
 }
 
 VALID_TASK_TYPES = {
-    "email_send",
-    "image_resize",
-    "data_export",
-    "report_gen",
-    "notification",
+    "fetch_weather",
+    "fetch_books",
+    "fetch_wiki",
+    "fetch_geocode",
+    "fetch_cocktail",
 }
