@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Distributed Task Queue Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: radial-gradient(circle at 10% 20%, #f5f7ff 0%, #eef8ff 35%, #f9fff4 100%); }
+  </style>
+</head>
+<body class="min-h-screen text-slate-800">
+  <div class="max-w-7xl mx-auto p-4 md:p-8">
+    <header class="mb-6">
+      <h1 class="text-3xl md:text-4xl font-black tracking-tight">Distributed Task Queue</h1>
+      <p class="text-sm text-slate-600 mt-1">Live monitoring and control panel (auto-refresh every 3 seconds)</p>
+    </header>
+
+    <section class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6" id="stats-bar"></section>
+
+    <section class="bg-white/80 backdrop-blur border border-slate-200 rounded-xl shadow-sm p-4 mb-6">
+      <h2 class="text-xl font-bold mb-3">Submit Task</h2>
+      <form id="task-form" class="grid grid-cols-1 md:grid-cols-5 gap-3">
+        <select id="task_type" class="border rounded p-2 md:col-span-1" required>
+          <option value="email_send">email_send</option>
+          <option value="image_resize">image_resize</option>
+          <option value="data_export">data_export</option>
+          <option value="report_gen">report_gen</option>
+          <option value="notification">notification</option>
+        </select>
+        <input id="payload" class="border rounded p-2 md:col-span-2" placeholder='Payload JSON, e.g. {"user":"alice"}' />
+        <input id="priority" type="number" min="1" max="10" value="5" class="border rounded p-2" placeholder="Priority" />
+        <input id="max_retries" type="number" min="0" max="20" value="3" class="border rounded p-2" placeholder="Retries" />
+        <button class="md:col-span-5 bg-slate-900 text-white rounded p-2 font-semibold hover:bg-slate-700 transition">Submit Task</button>
+      </form>
+      <p id="submit-result" class="text-sm mt-2"></p>
+    </section>
+
+    <section class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+      <div class="xl:col-span-2 bg-white/80 backdrop-blur border border-slate-200 rounded-xl shadow-sm p-4 overflow-x-auto">
+        <h2 class="text-xl font-bold mb-3">Live Tasks</h2>
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left border-b">
+              <th class="py-2 pr-2">Task ID</th>
+              <th class="py-2 pr-2">Type</th>
+              <th class="py-2 pr-2">Status</th>
+              <th class="py-2 pr-2">Retries</th>
+              <th class="py-2 pr-2">Worker</th>
+              <th class="py-2 pr-2">Created</th>
+            </tr>
+          </thead>
+          <tbody id="tasks-table"></tbody>
+        </table>
+      </div>
+
+      <div class="bg-white/80 backdrop-blur border border-slate-200 rounded-xl shadow-sm p-4">
+        <h2 class="text-xl font-bold mb-3">Workers</h2>
+        <div id="workers-panel" class="space-y-3"></div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const API_BASE = 'http://localhost:8000';
+
+    function statusClass(status) {
+      const map = {
+        PENDING: 'bg-yellow-100 text-yellow-800',
+        IN_PROGRESS: 'bg-blue-100 text-blue-800',
+        COMPLETED: 'bg-green-100 text-green-800',
+        FAILED: 'bg-red-100 text-red-700',
+        DEAD: 'bg-red-200 text-red-900',
+        CANCELLED: 'bg-slate-200 text-slate-700'
+      };
+      return map[status] || 'bg-slate-100 text-slate-700';
+    }
+
+    function card(title, value, color) {
+      return `
+        <div class="rounded-xl p-4 text-white shadow ${color}">
+          <div class="text-xs uppercase tracking-wide opacity-90">${title}</div>
+          <div class="text-2xl font-bold">${value}</div>
+        </div>
+      `;
+    }
+
+    function fmtTime(ts) {
+      if (!ts) return '-';
+      return new Date(ts * 1000).toLocaleTimeString();
+    }
+
+    async function loadStats() {
+      const res = await fetch(`${API_BASE}/queue/stats`);
+      const data = await res.json();
+      const s = data.status_counts;
+      document.getElementById('stats-bar').innerHTML = [
+        card('Pending', s.PENDING || 0, 'bg-yellow-500'),
+        card('In Progress', s.IN_PROGRESS || 0, 'bg-blue-500'),
+        card('Completed', s.COMPLETED || 0, 'bg-green-600'),
+        card('Failed', s.FAILED || 0, 'bg-rose-600'),
+        card('Dead', s.DEAD || 0, 'bg-red-700')
+      ].join('');
+    }
+
+    async function loadTasks() {
+      const res = await fetch(`${API_BASE}/tasks`);
+      const tasks = await res.json();
+      const rows = tasks.slice(0, 100).map(t => `
+        <tr class="border-b border-slate-100 hover:bg-slate-50/80">
+          <td class="py-2 pr-2 font-mono text-xs">${t.task_id.slice(0, 8)}...</td>
+          <td class="py-2 pr-2">${t.task_type}</td>
+          <td class="py-2 pr-2">
+            <span class="px-2 py-1 rounded-full text-xs font-bold ${statusClass(t.status)}">${t.status}</span>
+          </td>
+          <td class="py-2 pr-2">${t.retry_count}/${t.max_retries}</td>
+          <td class="py-2 pr-2">${t.worker_id || '-'}</td>
+          <td class="py-2 pr-2">${fmtTime(t.created_at)}</td>
+        </tr>
+      `).join('');
+      document.getElementById('tasks-table').innerHTML = rows || '<tr><td colspan="6" class="py-4 text-center text-slate-500">No tasks yet</td></tr>';
+    }
+
+    async function loadWorkers() {
+      const res = await fetch(`${API_BASE}/workers`);
+      const workers = await res.json();
+      const html = workers.map(w => `
+        <div class="border rounded-lg p-3 ${w.status === 'alive' ? 'border-emerald-200 bg-emerald-50' : 'border-rose-200 bg-rose-50'}">
+          <div class="font-semibold">${w.worker_id}</div>
+          <div class="text-sm">Status: <span class="font-bold">${w.status.toUpperCase()}</span></div>
+          <div class="text-sm">Heartbeat: ${fmtTime(w.last_heartbeat)}</div>
+          <div class="text-sm">Done: ${w.tasks_done || 0} | Failed: ${w.tasks_failed || 0}</div>
+        </div>
+      `).join('');
+      document.getElementById('workers-panel').innerHTML = html || '<p class="text-slate-500 text-sm">No worker activity yet</p>';
+    }
+
+    async function refresh() {
+      try {
+        await Promise.all([loadStats(), loadTasks(), loadWorkers()]);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    document.getElementById('task-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const task_type = document.getElementById('task_type').value;
+      const priority = Number(document.getElementById('priority').value);
+      const max_retries = Number(document.getElementById('max_retries').value);
+
+      let payload = {};
+      const payloadRaw = document.getElementById('payload').value.trim();
+      if (payloadRaw) {
+        try {
+          payload = JSON.parse(payloadRaw);
+        } catch {
+          document.getElementById('submit-result').textContent = 'Invalid JSON payload';
+          document.getElementById('submit-result').className = 'text-sm mt-2 text-red-600';
+          return;
+        }
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/tasks/submit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ task_type, payload, priority, max_retries })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Submit failed');
+
+        document.getElementById('submit-result').textContent = `Submitted: ${data.task_id}`;
+        document.getElementById('submit-result').className = 'text-sm mt-2 text-emerald-700';
+        document.getElementById('payload').value = '';
+        await refresh();
+      } catch (err) {
+        document.getElementById('submit-result').textContent = String(err);
+        document.getElementById('submit-result').className = 'text-sm mt-2 text-red-600';
+      }
+    });
+
+    refresh();
+    setInterval(refresh, 3000);
+  </script>
+</body>
+</html>
