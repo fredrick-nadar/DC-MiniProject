@@ -405,7 +405,10 @@
 
 <script>
   const API = 'http://localhost:8000';
-  const TASK_TYPES = ["fetch_weather", "fetch_books", "fetch_wiki", "fetch_geocode", "fetch_cocktail"];
+  const TASK_TYPES = [
+    "fetch_joke", "fetch_dog", "fetch_user", "fetch_fact", "fetch_ip",
+    "fetch_product", "fetch_pokemon", "fetch_chuck", "fetch_country", "fetch_number"
+  ];
 
   // ── Chart.js Setup ──
   const statusCtx = document.getElementById('statusChart').getContext('2d');
@@ -667,41 +670,7 @@
     }
   }
 
-  // ── Single Submit ──
-  document.getElementById('task-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const result = document.getElementById('submit-result');
-    const taskType = document.getElementById('task_type').value;
-    const priority = Number(document.getElementById('priority').value);
-    const maxRetries = Number(document.getElementById('max_retries').value);
-
-    let payload = {};
-    const raw = document.getElementById('payload').value.trim();
-    if (raw) {
-      try { payload = JSON.parse(raw); } catch {
-        result.textContent = '✗ Invalid JSON payload';
-        result.className = 'submit-result err';
-        return;
-      }
-    }
-
-    try {
-      const r = await fetch(`${API}/tasks/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task_type: taskType, payload, priority, max_retries: maxRetries })
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.detail || 'Submit failed');
-      result.textContent = `✓ Submitted: ${d.task_id}`;
-      result.className = 'submit-result ok';
-      document.getElementById('payload').value = '';
-      await refresh();
-    } catch (err) {
-      result.textContent = `✗ ${err}`;
-      result.className = 'submit-result err';
-    }
-  });
+  // (Single submit form removed — batch only)
 
   // ── Refresh Loop ──
   async function refresh() {

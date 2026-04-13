@@ -6,7 +6,10 @@ from collections import Counter
 import requests
 
 API_BASE = "http://localhost:8000"
-TASK_TYPES = ["fetch_joke", "fetch_dog", "fetch_user", "fetch_fact", "fetch_ip"]
+TASK_TYPES = [
+    "fetch_joke", "fetch_dog", "fetch_user", "fetch_fact", "fetch_ip",
+    "fetch_product", "fetch_pokemon", "fetch_chuck", "fetch_country", "fetch_number",
+]
 
 def submit_tasks(n: int = 20) -> list[str]:
     task_ids: list[str] = []
