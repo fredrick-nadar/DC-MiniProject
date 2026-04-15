@@ -17,21 +17,28 @@ from config import (
     WORKER_TIMEOUT_SECONDS,
 )
 from database import Database
-from models import RetryTaskResponse, SubmitTaskRequest, SubmitTaskResponse
+from models import (
+    ReplayBatchRequest,
+    RetryTaskResponse,
+    SubmitTaskRequest,
+    SubmitTaskResponse,
+)
 from producer import TaskProducer
-from scheduler import RetryScheduler
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
-    format="%(asctime)s [%(levelname)s] [api] %(message)s",
+    format="%(asctime)s [%(levelname)s] [scheduler] %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Distributed Task Queue API", version="2.0.0")
+app = FastAPI(
+    title="Distributed Task Queue API",
+    description="Kafka-backed task queue with priority scheduling, idempotency, and DLQ replay.",
+    version="2.0.0",
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -39,23 +46,26 @@ app.add_middleware(
 db = Database()
 broker = KafkaBroker(db)
 producer = TaskProducer(db, broker)
-scheduler = RetryScheduler(broker)
 
 
 @app.on_event("startup")
-def on_startup() -> None:
-    logger.info("Starting API and retry scheduler")
+def startup() -> None:
+    from scheduler import RetryScheduler
+    scheduler = RetryScheduler(broker)
     scheduler.start()
+    logger.info("Starting API and retry scheduler")
 
 
 @app.on_event("shutdown")
-def on_shutdown() -> None:
-    logger.info("Stopping scheduler and closing Kafka connections")
-    scheduler.stop()
+def shutdown() -> None:
     broker.close()
 
 
-@app.get("/health")
+# ──────────────────────────────────────────────────────────────────────────────
+# Health
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.get("/health", tags=["system"])
 def health() -> dict[str, Any]:
     kafka_ok = broker.ping()
     return {
@@ -64,22 +74,39 @@ def health() -> dict[str, Any]:
     }
 
 
-@app.post("/tasks/submit", response_model=SubmitTaskResponse)
+# ──────────────────────────────────────────────────────────────────────────────
+# Task Submission
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.post("/tasks/submit", response_model=SubmitTaskResponse, tags=["tasks"])
 def submit_task(req: SubmitTaskRequest) -> SubmitTaskResponse:
     try:
-        task = producer.submit_task(
+        task, deduplicated = producer.submit_task(
             task_type=req.task_type,
             payload=req.payload,
             priority=req.priority,
             max_retries=req.max_retries,
+            idempotency_key=req.idempotency_key,
+            run_after_seconds=req.run_after_seconds,
+            timeout_seconds=req.timeout_seconds,
         )
-        return SubmitTaskResponse(task_id=task["task_id"], status=task["status"], message="Task submitted")
+        msg = "Existing task returned (idempotent)" if deduplicated else "Task submitted"
+        return SubmitTaskResponse(
+            task_id=task["task_id"],
+            status=task["status"],
+            message=msg,
+            deduplicated=deduplicated,
+        )
     except Exception as exc:
         logger.exception("Failed to submit task")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@app.get("/tasks/{task_id}")
+# ──────────────────────────────────────────────────────────────────────────────
+# Task Queries
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.get("/tasks/{task_id}", tags=["tasks"])
 def get_task(task_id: str) -> dict[str, Any]:
     task = db.get_task(task_id)
     if not task:
@@ -88,7 +115,7 @@ def get_task(task_id: str) -> dict[str, Any]:
     return task
 
 
-@app.get("/tasks")
+@app.get("/tasks", tags=["tasks"])
 def list_tasks(status: Optional[str] = Query(default=None)) -> list[dict[str, Any]]:
     try:
         return db.list_tasks(status=status)
@@ -96,7 +123,100 @@ def list_tasks(status: Optional[str] = Query(default=None)) -> list[dict[str, An
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@app.delete("/tasks/clear")
+# ──────────────────────────────────────────────────────────────────────────────
+# DLQ — Dead Letter Queue
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.get("/tasks/dead", tags=["dlq"])
+def list_dead_tasks() -> list[dict[str, Any]]:
+    """Return all DEAD tasks with their full retry history."""
+    tasks = db.list_tasks(status=STATUS_DEAD)
+    for task in tasks:
+        task["retry_history"] = db.get_retry_history(task["task_id"])
+    return tasks
+
+
+@app.post("/tasks/{task_id}/retry", response_model=RetryTaskResponse, tags=["dlq"])
+def manual_retry_dead_task(
+    task_id: str,
+    patch_payload: Optional[dict[str, Any]] = None,
+) -> RetryTaskResponse:
+    """Replay a single DEAD task. Optionally patch its payload before re-enqueuing."""
+    task = db.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task["status"] != STATUS_DEAD:
+        raise HTTPException(status_code=409, detail="Only DEAD tasks can be manually retried")
+
+    try:
+        if patch_payload is not None:
+            task["payload"] = {**task["payload"], **patch_payload}
+
+        db.update_task(
+            task_id,
+            retry_count=0,
+            status=STATUS_PENDING,
+            worker_id=None,
+            started_at=None,
+            completed_at=None,
+            error_message=None,
+        )
+        task_to_enqueue = {**task, "retry_count": 0, "status": STATUS_PENDING,
+                           "worker_id": None, "started_at": None}
+        broker.requeue_immediate(task_to_enqueue, reason="Manual retry requested")
+        db.log_event("manual_retry", "Dead task manually retried", task_id=task_id)
+        return RetryTaskResponse(task_id=task_id, status=STATUS_PENDING, message="Task requeued")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/tasks/replay-batch", tags=["dlq"])
+def replay_batch(req: ReplayBatchRequest) -> dict[str, Any]:
+    """
+    Bulk-replay multiple DEAD tasks.
+    Optionally patch_payload is merged into every replayed task's payload.
+    Returns counts of replayed / skipped tasks.
+    """
+    replayed, skipped = [], []
+    for task_id in req.task_ids:
+        task = db.get_task(task_id)
+        if not task or task["status"] != STATUS_DEAD:
+            skipped.append(task_id)
+            continue
+        try:
+            if req.patch_payload:
+                task["payload"] = {**task["payload"], **req.patch_payload}
+            db.update_task(
+                task_id,
+                retry_count=0,
+                status=STATUS_PENDING,
+                worker_id=None,
+                started_at=None,
+                completed_at=None,
+                error_message=None,
+            )
+            task_to_enqueue = {**task, "retry_count": 0, "status": STATUS_PENDING,
+                               "worker_id": None, "started_at": None}
+            broker.requeue_immediate(task_to_enqueue, reason="Batch replay")
+            db.log_event("batch_replay", "Dead task replayed in batch", task_id=task_id)
+            replayed.append(task_id)
+        except Exception as exc:
+            logger.exception("Failed to replay task %s", task_id)
+            skipped.append(task_id)
+
+    return {
+        "replayed": len(replayed),
+        "skipped": len(skipped),
+        "replayed_ids": replayed,
+        "skipped_ids": skipped,
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task Management
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.delete("/tasks/clear", tags=["tasks"])
 def clear_all_tasks() -> dict[str, Any]:
     try:
         deleted = db.clear_all_tasks()
@@ -105,7 +225,7 @@ def clear_all_tasks() -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@app.delete("/tasks/{task_id}")
+@app.delete("/tasks/{task_id}", tags=["tasks"])
 def cancel_task(task_id: str) -> dict[str, Any]:
     task = db.get_task(task_id)
     if not task:
@@ -122,39 +242,11 @@ def cancel_task(task_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@app.post("/tasks/{task_id}/retry", response_model=RetryTaskResponse)
-def manual_retry_dead_task(task_id: str) -> RetryTaskResponse:
-    task = db.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    if task["status"] != STATUS_DEAD:
-        raise HTTPException(status_code=409, detail="Only DEAD tasks can be manually retried")
+# ──────────────────────────────────────────────────────────────────────────────
+# Workers
+# ──────────────────────────────────────────────────────────────────────────────
 
-    try:
-        task["retry_count"] = 0
-        task["status"] = STATUS_PENDING
-        task["worker_id"] = None
-        task["started_at"] = None
-        task["completed_at"] = None
-        task["error_message"] = None
-
-        db.update_task(
-            task_id,
-            retry_count=0,
-            status=STATUS_PENDING,
-            worker_id=None,
-            started_at=None,
-            completed_at=None,
-            error_message=None,
-        )
-        broker.requeue_immediate(task, reason="Manual retry requested")
-        db.log_event("manual_retry", "Dead task manually retried", task_id=task_id)
-        return RetryTaskResponse(task_id=task_id, status=STATUS_PENDING, message="Task requeued")
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
-@app.get("/workers")
+@app.get("/workers", tags=["workers"])
 def list_workers() -> list[dict[str, Any]]:
     now = time.time()
     heartbeats = broker.get_worker_heartbeats()
@@ -181,7 +273,11 @@ def list_workers() -> list[dict[str, Any]]:
     return workers
 
 
-@app.get("/queue/stats")
+# ──────────────────────────────────────────────────────────────────────────────
+# Queue Stats
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.get("/queue/stats", tags=["system"])
 def queue_stats() -> dict[str, Any]:
     counts = db.get_status_counts()
     queue_depths = broker.get_queue_depths()
@@ -191,6 +287,9 @@ def queue_stats() -> dict[str, Any]:
 
     attempts = completed + dead + failed
     success_rate = (completed / attempts) if attempts > 0 else 0.0
+
+    # Priority band distribution
+    priority_dist = db.get_priority_distribution()
 
     return {
         "status_counts": {
@@ -205,6 +304,7 @@ def queue_stats() -> dict[str, Any]:
         "success_rate": round(success_rate, 4),
         "average_processing_time_seconds": round(db.get_average_processing_time(), 4),
         "total_tasks": sum(counts.values()),
+        "priority_distribution": priority_dist,
     }
 
 

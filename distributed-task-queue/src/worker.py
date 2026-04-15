@@ -68,13 +68,17 @@ class WorkerNode:
         thread.start()
         return thread
 
-    def _simulate_task(self, task_type: str, task_id: str) -> None:
-        logger.info("Worker %s processing %s (task_id=%s)", self.worker_id, task_type, task_id)
+    def _simulate_task(self, task_type: str, task_id: str, timeout_seconds: int = 8) -> None:
+        logger.info("Worker %s processing %s (task_id=%s, timeout=%ss)",
+                    self.worker_id, task_type, task_id, timeout_seconds)
         if task_type not in API_ENDPOINTS:
             raise ValueError(f"Unknown task_type: {task_type}")
         try:
-            res = requests.get(API_ENDPOINTS[task_type], timeout=8,
-                               headers={"User-Agent": "DistributedTaskQueueDemo/1.0"})
+            res = requests.get(
+                API_ENDPOINTS[task_type],
+                timeout=timeout_seconds,
+                headers={"User-Agent": "DistributedTaskQueueDemo/1.0"},
+            )
             res.raise_for_status()
             logger.info("Task %s OK — %s bytes", task_id, len(res.content))
         except requests.RequestException as exc:
@@ -124,7 +128,11 @@ class WorkerNode:
                 )
 
                 try:
-                    self._simulate_task(task["task_type"], task_id)
+                    self._simulate_task(
+                        task["task_type"],
+                        task_id,
+                        timeout_seconds=int(task.get("timeout_seconds", 8)),
+                    )
                     done_at = time.time()
                     self.db.update_task(
                         task_id,

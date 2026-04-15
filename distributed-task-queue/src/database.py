@@ -44,11 +44,16 @@ class Database:
                     completed_at REAL,
                     worker_id TEXT,
                     error_message TEXT,
-                    last_updated REAL NOT NULL
+                    last_updated REAL NOT NULL,
+                    idempotency_key TEXT,
+                    timeout_seconds INTEGER NOT NULL DEFAULT 8
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
                 CREATE INDEX IF NOT EXISTS idx_tasks_worker ON tasks(worker_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_idempotency
+                    ON tasks(idempotency_key)
+                    WHERE idempotency_key IS NOT NULL;
 
                 CREATE TABLE IF NOT EXISTS retry_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,7 +87,7 @@ class Database:
                     expires_at REAL NOT NULL
                 );
 
-                -- Replaces Redis ZSET delayed queue
+                -- Delayed queue (user-submitted delays + retry backoff)
                 CREATE TABLE IF NOT EXISTS delayed_tasks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     task_id TEXT NOT NULL,
@@ -91,7 +96,26 @@ class Database:
                 );
                 """
             )
-            conn.commit()
+            # Safe migration for existing databases that predate these columns
+            for col, definition in [
+                ("idempotency_key", "TEXT"),
+                ("timeout_seconds", "INTEGER NOT NULL DEFAULT 8"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} {definition}")
+                    conn.commit()
+                    logger.info("Migrated tasks table: added column '%s'", col)
+                except Exception:
+                    pass  # column already exists — that's fine
+            # Safe migration: add the unique index if not present
+            try:
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_idempotency "
+                    "ON tasks(idempotency_key) WHERE idempotency_key IS NOT NULL"
+                )
+                conn.commit()
+            except Exception:
+                pass
 
     # -----------------------------------------------------------------------
     # Tasks
@@ -104,8 +128,9 @@ class Database:
                 INSERT INTO tasks (
                     task_id, task_type, payload, status, priority, retry_count,
                     max_retries, created_at, started_at, completed_at,
-                    worker_id, error_message, last_updated
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    worker_id, error_message, last_updated,
+                    idempotency_key, timeout_seconds
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task["task_id"],
@@ -121,9 +146,23 @@ class Database:
                     task.get("worker_id"),
                     task.get("error_message"),
                     time.time(),
+                    task.get("idempotency_key"),
+                    task.get("timeout_seconds", 8),
                 ),
             )
             conn.commit()
+
+    def find_by_idempotency_key(self, key: str) -> Optional[dict[str, Any]]:
+        """Return an existing task with this idempotency key, or None."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM tasks WHERE idempotency_key = ? LIMIT 1", (key,)
+            ).fetchone()
+        if not row:
+            return None
+        task = dict(row)
+        task["payload"] = json.loads(task["payload"])
+        return task
 
     def get_task(self, task_id: str) -> Optional[dict[str, Any]]:
         with self._connect() as conn:
@@ -199,6 +238,20 @@ class Database:
         with self._connect() as conn:
             rows = conn.execute("SELECT status, COUNT(*) as c FROM tasks GROUP BY status").fetchall()
         return {row["status"]: row["c"] for row in rows}
+
+    def get_priority_distribution(self) -> dict[str, int]:
+        """Return task counts bucketed into High (8-10), Medium (4-7), Low (1-3) priority bands."""
+        with self._connect() as conn:
+            high = conn.execute(
+                "SELECT COUNT(*) AS c FROM tasks WHERE priority >= 8"
+            ).fetchone()["c"]
+            med = conn.execute(
+                "SELECT COUNT(*) AS c FROM tasks WHERE priority >= 4 AND priority < 8"
+            ).fetchone()["c"]
+            low = conn.execute(
+                "SELECT COUNT(*) AS c FROM tasks WHERE priority < 4"
+            ).fetchone()["c"]
+        return {"high": high, "medium": med, "low": low}
 
     def get_in_progress_tasks(self) -> list[dict[str, Any]]:
         with self._connect() as conn:

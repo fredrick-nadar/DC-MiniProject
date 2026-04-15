@@ -183,6 +183,13 @@ class KafkaBroker:
                 logger.exception("Failed to republish delayed task %s", task.get("task_id"))
         return len(due)
 
+    def schedule_delayed_task_direct(self, task: dict[str, Any], execute_after: float) -> None:
+        """Schedule a brand-new user-submitted task for future execution."""
+        self.db.schedule_delayed_task(task, execute_after)
+        logger.debug(
+            "User-delayed task %s scheduled for execute_after=%.0f", task["task_id"], execute_after
+        )
+
     # ------------------------------------------------------------------
     # Worker heartbeats (SQLite-backed)
     # ------------------------------------------------------------------
