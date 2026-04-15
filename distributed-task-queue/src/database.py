@@ -49,11 +49,7 @@ class Database:
                     timeout_seconds INTEGER NOT NULL DEFAULT 8
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-                CREATE INDEX IF NOT EXISTS idx_tasks_worker ON tasks(worker_id);
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_idempotency
-                    ON tasks(idempotency_key)
-                    WHERE idempotency_key IS NOT NULL;
+
 
                 CREATE TABLE IF NOT EXISTS retry_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,7 +92,7 @@ class Database:
                 );
                 """
             )
-            # Safe migration for existing databases that predate these columns
+            # Safe migration: add new columns if this is an existing database
             for col, definition in [
                 ("idempotency_key", "TEXT"),
                 ("timeout_seconds", "INTEGER NOT NULL DEFAULT 8"),
@@ -107,15 +103,19 @@ class Database:
                     logger.info("Migrated tasks table: added column '%s'", col)
                 except Exception:
                     pass  # column already exists — that's fine
-            # Safe migration: add the unique index if not present
-            try:
-                conn.execute(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_idempotency "
-                    "ON tasks(idempotency_key) WHERE idempotency_key IS NOT NULL"
-                )
-                conn.commit()
-            except Exception:
-                pass
+
+            # Create indexes safely (work on both new and existing databases)
+            for ddl in [
+                "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)",
+                "CREATE INDEX IF NOT EXISTS idx_tasks_worker ON tasks(worker_id)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_idempotency "
+                "ON tasks(idempotency_key) WHERE idempotency_key IS NOT NULL",
+            ]:
+                try:
+                    conn.execute(ddl)
+                    conn.commit()
+                except Exception:
+                    pass
 
     # -----------------------------------------------------------------------
     # Tasks
