@@ -59,4 +59,5 @@ TERMINAL_STATUSES = {
 VALID_TASK_TYPES = {
     "fetch_joke", "fetch_dog", "fetch_user", "fetch_fact", "fetch_ip",
     "fetch_product", "fetch_pokemon", "fetch_chuck", "fetch_country", "fetch_number",
+    "fetch_large_photos", "fetch_slow_httpbin",
 }

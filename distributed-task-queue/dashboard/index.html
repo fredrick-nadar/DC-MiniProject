@@ -11,31 +11,22 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg-primary: #0f1117;
-      --bg-card: rgba(22, 27, 45, 0.85);
-      --bg-card-hover: rgba(30, 36, 58, 0.95);
-      --border: rgba(99, 115, 171, 0.15);
-      --text-primary: #e8ecf4;
-      --text-secondary: #8892a8;
-      --text-muted: #5a6478;
-      --accent-blue: #6366f1;
-      --accent-purple: #8b5cf6;
-      --accent-cyan: #22d3ee;
-      --accent-green: #10b981;
+      --bg-primary: #f8f9fa;
+      --bg-card: #ffffff;
+      --border: #dee2e6;
+      --text-primary: #212529;
+      --text-secondary: #495057;
+      --text-muted: #6c757d;
+      --accent-blue: #0d6efd;
+      --accent-green: #198754;
       --accent-yellow: #f59e0b;
-      --accent-red: #ef4444;
-      --accent-rose: #f43f5e;
-      --accent-orange: #f97316;
-      --glow-blue: rgba(99, 102, 241, 0.3);
-      --glow-green: rgba(16, 185, 129, 0.3);
-      --glow-red: rgba(239, 68, 68, 0.3);
+      --accent-red: #dc3545;
+      --accent-rose: #d63384;
+      --accent-orange: #fd7e14;
     }
     body {
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
       background: var(--bg-primary);
-      background-image:
-        radial-gradient(ellipse at 10% 0%, rgba(99,102,241,0.08) 0%, transparent 50%),
-        radial-gradient(ellipse at 90% 100%, rgba(139,92,246,0.06) 0%, transparent 50%);
       color: var(--text-primary);
       min-height: 100vh;
       -webkit-font-smoothing: antialiased;
@@ -49,30 +40,24 @@
       border-bottom: 1px solid var(--border);
     }
     .header h1 {
-      font-size: 26px; font-weight: 900; letter-spacing: -0.5px;
-      background: linear-gradient(135deg, #e8ecf4 0%, #8b5cf6 50%, #6366f1 100%);
-      -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+      font-size: 26px; font-weight: 800; letter-spacing: -0.5px;
+      color: var(--text-primary);
     }
     .header-sub { font-size: 13px; color: var(--text-muted); margin-top: 3px; }
     .health-badge {
       display: flex; align-items: center; gap: 8px;
-      padding: 8px 16px; border-radius: 999px;
-      background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.25);
+      padding: 8px 16px; border-radius: 4px;
+      background: #e8f5e9; border: 1px solid #c8e6c9;
       font-size: 13px; font-weight: 600; color: var(--accent-green); transition: all 0.3s;
     }
     .health-badge.degraded {
-      background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.25);
+      background: #ffebee; border-color: #ffcdd2;
       color: var(--accent-red);
     }
     .health-dot {
       width: 8px; height: 8px; border-radius: 50%; background: var(--accent-green);
-      animation: pulse 2s ease-in-out infinite;
     }
-    .health-badge.degraded .health-dot { background: var(--accent-red); animation: none; }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--glow-green); }
-      50% { opacity: 0.7; box-shadow: 0 0 0 6px transparent; }
-    }
+    .health-badge.degraded .health-dot { background: var(--accent-red); }
 
     /* ── Stats Cards Row ── */
     .stats-row {
@@ -81,60 +66,41 @@
     }
     .stat-card {
       background: var(--bg-card); border: 1px solid var(--border);
-      border-radius: 14px; padding: 16px 18px;
-      backdrop-filter: blur(12px); transition: all 0.25s;
-      position: relative; overflow: hidden;
+      border-radius: 4px; padding: 16px 18px;
+      transition: all 0.2s;
     }
-    .stat-card::before {
-      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
-      border-radius: 14px 14px 0 0;
-    }
-    .stat-card:nth-child(1)::before { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
-    .stat-card:nth-child(2)::before { background: linear-gradient(90deg, #6366f1, #818cf8); }
-    .stat-card:nth-child(3)::before { background: linear-gradient(90deg, #10b981, #34d399); }
-    .stat-card:nth-child(4)::before { background: linear-gradient(90deg, #f43f5e, #fb7185); }
-    .stat-card:nth-child(5)::before { background: linear-gradient(90deg, #ef4444, #f87171); }
-    .stat-card:nth-child(6)::before { background: linear-gradient(90deg, #22d3ee, #67e8f9); }
-    .stat-card:nth-child(7)::before { background: linear-gradient(90deg, #f97316, #fb923c); }
-    .stat-card:hover { transform: translateY(-2px); border-color: rgba(99, 115, 171, 0.3); }
-    .stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--text-muted); font-weight: 600; }
-    .stat-value { font-size: 28px; font-weight: 800; margin-top: 4px; letter-spacing: -1px; }
-    .stat-card:nth-child(1) .stat-value { color: var(--accent-yellow); }
-    .stat-card:nth-child(2) .stat-value { color: var(--accent-blue); }
-    .stat-card:nth-child(3) .stat-value { color: var(--accent-green); }
-    .stat-card:nth-child(4) .stat-value { color: var(--accent-rose); }
-    .stat-card:nth-child(5) .stat-value { color: var(--accent-red); }
-    .stat-card:nth-child(6) .stat-value { color: var(--accent-cyan); }
-    .stat-card:nth-child(7) .stat-value { color: var(--accent-orange); }
+    .stat-card:hover { border-color: #adb5bd; }
+    .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 600; }
+    .stat-value { font-size: 28px; font-weight: 700; margin-top: 4px; color: var(--text-primary); }
 
     /* ── Controls ── */
     .controls {
       display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; align-items: center;
     }
     .btn {
-      padding: 10px 20px; border: none; border-radius: 10px; cursor: pointer;
-      font-family: inherit; font-size: 13px; font-weight: 700;
-      transition: all 0.2s; display: flex; align-items: center; gap: 8px;
+      padding: 10px 20px; border: 1px solid; border-radius: 4px; cursor: pointer;
+      font-family: inherit; font-size: 13px; font-weight: 600;
+      transition: all 0.15s; display: flex; align-items: center; gap: 8px;
     }
-    .btn:active { transform: scale(0.97); }
-    .btn-primary { background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; box-shadow: 0 4px 15px var(--glow-blue); }
-    .btn-primary:hover { box-shadow: 0 6px 25px var(--glow-blue); transform: translateY(-1px); }
-    .btn-danger { background: rgba(239, 68, 68, 0.12); color: var(--accent-red); border: 1px solid rgba(239, 68, 68, 0.25); }
-    .btn-danger:hover { background: rgba(239, 68, 68, 0.2); }
-    .btn-success { background: rgba(16, 185, 129, 0.12); color: var(--accent-green); border: 1px solid rgba(16, 185, 129, 0.25); }
-    .btn-success:hover { background: rgba(16, 185, 129, 0.2); }
-    .btn-warning { background: rgba(249, 115, 22, 0.12); color: var(--accent-orange); border: 1px solid rgba(249, 115, 22, 0.25); }
-    .btn-warning:hover { background: rgba(249, 115, 22, 0.2); }
-    .btn-sm { padding: 6px 14px; font-size: 11px; border-radius: 8px; }
-    .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important; box-shadow: none !important; }
-    .batch-status { font-size: 12px; color: var(--text-secondary); margin-left: 4px; }
+    .btn:active { transform: translateY(1px); }
+    .btn-primary { background: #0d6efd; color: white; border-color: #0d6efd; }
+    .btn-primary:hover { background: #0b5ed7; border-color: #0a58ca; }
+    .btn-danger { background: #dc3545; color: white; border-color: #dc3545; }
+    .btn-danger:hover { background: #c82333; border-color: #bd2130; }
+    .btn-success { background: #198754; color: white; border-color: #198754; }
+    .btn-success:hover { background: #157347; border-color: #146c43; }
+    .btn-warning { background: #ffc107; color: #212529; border-color: #ffc107; }
+    .btn-warning:hover { background: #ffca2c; border-color: #ffc720; }
+    .btn-sm { padding: 6px 14px; font-size: 12px; border-radius: 4px; }
+    .btn:disabled { opacity: 0.65; cursor: not-allowed; }
+    .batch-status { font-size: 13px; color: var(--text-secondary); margin-left: 4px; }
 
     /* ── Info Bar ── */
     .info-bar {
       display: flex; justify-content: space-between; align-items: center;
       margin-bottom: 20px; padding: 12px 18px;
-      background: rgba(99, 102, 241, 0.06); border: 1px solid rgba(99, 102, 241, 0.12);
-      border-radius: 10px; font-size: 12px; color: var(--text-secondary); flex-wrap: wrap; gap: 8px;
+      background: #e9ecef; border: 1px solid var(--border);
+      border-radius: 4px; font-size: 13px; color: var(--text-secondary); flex-wrap: wrap; gap: 8px;
     }
     .info-bar strong { color: var(--text-primary); }
 
@@ -144,125 +110,111 @@
     }
     .chart-card {
       background: var(--bg-card); border: 1px solid var(--border);
-      border-radius: 14px; padding: 20px; backdrop-filter: blur(12px);
+      border-radius: 4px; padding: 20px;
     }
-    .chart-card h3 { font-size: 14px; font-weight: 700; margin-bottom: 14px; color: var(--text-primary); }
+    .chart-card h3 { font-size: 15px; font-weight: 600; margin-bottom: 14px; color: var(--text-primary); }
     .chart-container { position: relative; height: 200px; }
 
     /* ── Full-width line chart ── */
     .chart-full {
       background: var(--bg-card); border: 1px solid var(--border);
-      border-radius: 14px; padding: 20px; margin-bottom: 20px; backdrop-filter: blur(12px);
+      border-radius: 4px; padding: 20px; margin-bottom: 20px;
     }
     .chart-full-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
-    .chart-full-header h3 { font-size: 14px; font-weight: 700; color: var(--text-primary); }
+    .chart-full-header h3 { font-size: 15px; font-weight: 600; color: var(--text-primary); }
     .tps-badge {
-      font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 999px;
-      background: rgba(16,185,129,0.15); color: var(--accent-green);
+      font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 4px;
+      background: #e8f5e9; color: var(--accent-green); border: 1px solid #c8e6c9;
     }
 
     /* ── Main Grid ── */
     .main-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; margin-bottom: 20px; }
-    .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 22px; backdrop-filter: blur(12px); }
-    .card h3 { font-size: 15px; font-weight: 700; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; }
-    .card h3 .badge { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 999px; background: rgba(99,102,241,0.15); color: var(--accent-blue); }
+    .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 22px; }
+    .card h3 { font-size: 16px; font-weight: 600; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; }
+    .card h3 .badge { font-size: 12px; font-weight: 500; padding: 4px 10px; border-radius: 4px; background: #e9ecef; color: var(--text-primary); }
 
     /* ── Tasks Table ── */
     .tasks-table { width: 100%; border-collapse: separate; border-spacing: 0; }
     .tasks-table thead th {
-      font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px;
-      color: var(--text-muted); font-weight: 600; padding: 8px 10px;
-      text-align: left; border-bottom: 1px solid var(--border);
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+      color: var(--text-muted); font-weight: 600; padding: 10px 10px;
+      text-align: left; border-bottom: 2px solid var(--border);
       position: sticky; top: 0; background: var(--bg-card);
     }
-    .tasks-table tbody tr { transition: background 0.15s; }
-    .tasks-table tbody tr:hover { background: rgba(99, 102, 241, 0.04); }
-    .tasks-table td { padding: 9px 10px; font-size: 12px; border-bottom: 1px solid rgba(99,115,171,0.08); color: var(--text-secondary); }
-    .tasks-table .mono { font-family: 'SF Mono', monospace; font-size: 10px; color: var(--text-muted); }
+    .tasks-table tbody tr { transition: background 0.1s; }
+    .tasks-table tbody tr:hover { background: #f8f9fa; }
+    .tasks-table td { padding: 10px 10px; font-size: 13px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
+    .tasks-table .mono { font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; color: var(--text-muted); }
     .tasks-scroll { max-height: 420px; overflow-y: auto; }
-    .tasks-scroll::-webkit-scrollbar { width: 4px; }
-    .tasks-scroll::-webkit-scrollbar-thumb { background: rgba(99,115,171,0.2); border-radius: 10px; }
 
     /* Status Badges */
-    .status-badge { display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.3px; }
-    .status-PENDING { background: rgba(245,158,11,0.15); color: #fbbf24; }
-    .status-IN_PROGRESS { background: rgba(99,102,241,0.15); color: #818cf8; }
-    .status-COMPLETED { background: rgba(16,185,129,0.15); color: #34d399; }
-    .status-FAILED { background: rgba(244,63,94,0.15); color: #fb7185; }
-    .status-DEAD { background: rgba(239,68,68,0.15); color: #f87171; }
-    .status-CANCELLED { background: rgba(100,116,139,0.15); color: #94a3b8; }
+    .status-badge { display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.2px; }
+    .status-PENDING { background: #fff3cd; color: #856404; }
+    .status-IN_PROGRESS { background: #e2e3e5; color: #383d41; }
+    .status-COMPLETED { background: #d4edda; color: #155724; }
+    .status-FAILED { background: #f8d7da; color: #721c24; }
+    .status-DEAD { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    .status-CANCELLED { background: #e2e3e5; color: #383d41; }
 
     /* ── Workers Panel ── */
     .workers-list { display: flex; flex-direction: column; gap: 10px; }
-    .worker-card { padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border); transition: all 0.25s; }
-    .worker-card.alive { border-color: rgba(16,185,129,0.25); background: rgba(16,185,129,0.04); }
-    .worker-card.dead { border-color: rgba(239,68,68,0.25); background: rgba(239,68,68,0.04); }
-    .worker-name { font-weight: 700; font-size: 13px; margin-bottom: 5px; }
-    .worker-status { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; margin-bottom: 7px; }
-    .worker-status .dot { width: 7px; height: 7px; border-radius: 50%; }
-    .worker-card.alive .dot { background: var(--accent-green); animation: pulse 2s infinite; }
+    .worker-card { padding: 14px 16px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-card); }
+    .worker-card.alive { border-left: 4px solid var(--accent-green); }
+    .worker-card.dead { border-left: 4px solid var(--accent-red); }
+    .worker-name { font-weight: 600; font-size: 14px; margin-bottom: 6px; }
+    .worker-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; margin-bottom: 8px; }
+    .worker-status .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .worker-card.alive .dot { background: var(--accent-green); }
     .worker-card.dead .dot { background: var(--accent-red); }
-    .worker-stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; font-size: 10px; color: var(--text-muted); }
-    .worker-stats span { font-weight: 700; color: var(--text-secondary); }
+    .worker-stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; font-size: 12px; color: var(--text-muted); }
+    .worker-stats span { font-weight: 600; color: var(--text-primary); }
 
     /* ── DLQ Panel ── */
     .dlq-section {
-      background: var(--bg-card); border: 1px solid rgba(239,68,68,0.2);
-      border-radius: 14px; padding: 22px; margin-bottom: 20px; backdrop-filter: blur(12px);
+      background: var(--bg-card); border: 1px solid var(--accent-red);
+      border-radius: 4px; padding: 22px; margin-bottom: 20px;
     }
     .dlq-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-    .dlq-header h3 { font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+    .dlq-header h3 { font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
     .dlq-badge-count {
-      font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 999px;
-      background: rgba(239,68,68,0.15); color: var(--accent-red);
+      font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 4px;
+      background: #f8d7da; color: #721c24;
     }
     .dlq-table { width: 100%; border-collapse: separate; border-spacing: 0; }
     .dlq-table th {
-      font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px;
-      color: var(--text-muted); font-weight: 600; padding: 8px 10px;
-      text-align: left; border-bottom: 1px solid var(--border);
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+      color: var(--text-muted); font-weight: 600; padding: 10px 10px;
+      text-align: left; border-bottom: 2px solid var(--border);
     }
-    .dlq-table td { padding: 10px; font-size: 12px; border-bottom: 1px solid rgba(99,115,171,0.06); color: var(--text-secondary); }
+    .dlq-table td { padding: 10px 10px; font-size: 13px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
     .dlq-table tr:last-child td { border-bottom: none; }
-    .dlq-table .mono { font-family: 'SF Mono', monospace; font-size: 10px; color: var(--text-muted); }
+    .dlq-table .mono { font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; color: var(--text-muted); }
     .dlq-scroll { max-height: 300px; overflow-y: auto; }
-    .dlq-scroll::-webkit-scrollbar { width: 4px; }
-    .dlq-scroll::-webkit-scrollbar-thumb { background: rgba(239,68,68,0.2); border-radius: 10px; }
 
     /* ── Retry History Expandable ── */
-    .retry-history { padding: 8px 10px; background: rgba(0,0,0,0.2); border-radius: 6px; margin-top: 6px; font-size: 11px; color: var(--text-muted); }
-    .retry-row { padding: 3px 0; border-bottom: 1px solid rgba(99,115,171,0.06); }
+    .retry-history { padding: 8px 12px; background: #f8f9fa; border: 1px solid var(--border); border-radius: 4px; margin-top: 6px; font-size: 12px; color: var(--text-muted); }
+    .retry-row { padding: 4px 0; border-bottom: 1px solid var(--border); }
     .retry-row:last-child { border: none; }
 
     /* ── Misc ── */
-    .empty-state { text-align: center; padding: 40px; color: var(--text-muted); font-size: 13px; }
+    .empty-state { text-align: center; padding: 40px; color: var(--text-muted); font-size: 14px; }
 
     /* ── Modal ── */
     .modal-overlay {
       display: none; position: fixed; inset: 0; z-index: 1000;
-      background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+      background: rgba(0,0,0,0.5);
       justify-content: center; align-items: center;
     }
     .modal-overlay.active { display: flex; }
-    .modal { background: #1a1f35; border: 1px solid var(--border); border-radius: 16px; padding: 28px 32px; max-width: 420px; width: 90%; text-align: center; }
-    .modal h4 { font-size: 18px; font-weight: 800; margin-bottom: 10px; }
-    .modal p { font-size: 13px; color: var(--text-secondary); margin-bottom: 20px; }
+    .modal { background: #ffffff; border: 1px solid var(--border); border-radius: 4px; padding: 28px 32px; max-width: 420px; width: 90%; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+    .modal h4 { font-size: 18px; font-weight: 600; margin-bottom: 12px; color: var(--text-primary); }
+    .modal p { font-size: 14px; color: var(--text-secondary); margin-bottom: 24px; }
     .modal-actions { display: flex; gap: 10px; justify-content: center; }
     .modal .btn { min-width: 100px; justify-content: center; }
 
-    @media (max-width: 1200px) {
-      .stats-row { grid-template-columns: repeat(4, 1fr); }
-      .charts-row { grid-template-columns: 1fr 1fr; }
-    }
-    @media (max-width: 900px) {
-      .stats-row { grid-template-columns: repeat(3, 1fr); }
-      .charts-row { grid-template-columns: 1fr; }
-      .main-grid { grid-template-columns: 1fr; }
-    }
-    @media (max-width: 640px) {
-      .stats-row { grid-template-columns: repeat(2, 1fr); }
-      .controls { flex-direction: column; }
-    }
+    @media (max-width: 1200px) { .stats-row { grid-template-columns: repeat(4, 1fr); } .charts-row { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 900px) { .stats-row { grid-template-columns: repeat(3, 1fr); } .charts-row { grid-template-columns: 1fr; } .main-grid { grid-template-columns: 1fr; } }
+    @media (max-width: 640px) { .stats-row { grid-template-columns: repeat(2, 1fr); } .controls { flex-direction: column; } }
   </style>
 </head>
 <body>
@@ -297,10 +249,6 @@
     <button class="btn btn-primary" id="btn-batch" onclick="submitBatch(10)">
       <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M7.5 1v13M1 7.5h13"/></svg>
       Submit Batch (10)
-    </button>
-    <button class="btn btn-success" id="btn-batch5" onclick="submitBatch(5)">
-      <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M7.5 1v13M1 7.5h13"/></svg>
-      Quick 5 Tasks
     </button>
     <button class="btn btn-warning" onclick="replayAllDead()" id="btn-replay-all">
       <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M1 4h9a4 4 0 0 1 0 8H1M4 1L1 4l3 3"/></svg>
@@ -414,7 +362,8 @@
   const API = 'http://localhost:8000';
   const TASK_TYPES = [
     "fetch_joke", "fetch_dog", "fetch_user", "fetch_fact", "fetch_ip",
-    "fetch_product", "fetch_pokemon", "fetch_chuck", "fetch_country"
+    "fetch_product", "fetch_pokemon", "fetch_chuck", "fetch_country", "fetch_number",
+    "fetch_large_photos", "fetch_slow_httpbin"
   ];
 
   // ── Chart Setup ───────────────────────────────────────────────────────────
@@ -659,7 +608,12 @@
 
   async function loadDLQ() {
     try {
-      const tasks = await fetch(`${API}/tasks/dead`).then(r => r.json());
+      const resp = await fetch(`${API}/tasks/dead`);
+      const payload = await resp.json();
+      if (!resp.ok) {
+        throw new Error(payload.detail || `HTTP ${resp.status}`);
+      }
+      const tasks = Array.isArray(payload) ? payload : [];
       document.getElementById('dlq-count').textContent = `${tasks.length} dead`;
 
       const tbody = document.getElementById('dlq-table');
@@ -691,6 +645,9 @@
       }).join('');
     } catch (e) {
       console.error('DLQ load error:', e);
+      document.getElementById('dlq-count').textContent = 'DLQ error';
+      document.getElementById('dlq-table').innerHTML =
+        '<tr><td colspan="7" class="empty-state">Could not load dead tasks. Check the API logs.</td></tr>';
     }
   }
 
@@ -698,16 +655,16 @@
 
   async function submitBatch(count = 10) {
     const btn  = document.getElementById('btn-batch');
-    const btn5 = document.getElementById('btn-batch5');
     const status = document.getElementById('batch-status');
-    btn.disabled = btn5.disabled = true;
+    btn.disabled = true;
     status.textContent = `Submitting ${count} tasks...`;
 
     let submitted = 0;
+    const submittedTaskIds = [];
     for (let i = 0; i < count; i++) {
       try {
         const taskType = TASK_TYPES[Math.floor(Math.random() * TASK_TYPES.length)];
-        await fetch(`${API}/tasks/submit`, {
+        const resp = await fetch(`${API}/tasks/submit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -718,6 +675,10 @@
             timeout_seconds: 8,
           })
         });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.task_id) submittedTaskIds.push(data.task_id);
+        }
         submitted++;
         status.textContent = `Submitted ${submitted}/${count}...`;
       } catch (e) {
@@ -726,10 +687,58 @@
       }
     }
 
-    btn.disabled = btn5.disabled = false;
-    status.textContent = `✓ ${submitted} tasks submitted!`;
-    setTimeout(() => status.textContent = '', 4000);
+    btn.disabled = false;
+    status.textContent = `✓ ${submitted} tasks submitted. Waiting for completion...`;
     await refresh();
+
+    if (submittedTaskIds.length > 0) {
+      await waitForTerminalAndSendReport(submittedTaskIds);
+    }
+  }
+
+  async function waitForTerminalAndSendReport(taskIds) {
+    const status = document.getElementById('batch-status');
+    const terminal = new Set(['COMPLETED', 'DEAD', 'FAILED', 'CANCELLED']);
+    const maxAttempts = 200;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const states = await Promise.all(
+          taskIds.map(id => fetch(`${API}/tasks/${id}`).then(r => r.json()))
+        );
+        const done = states.filter(t => terminal.has(t.status)).length;
+        status.textContent = `Processing ${done}/${taskIds.length} tasks...`;
+
+        if (done === taskIds.length) {
+          const reportResp = await fetch(`${API}/reports/telegram/for-tasks`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              task_ids: taskIds,
+              title: 'Dashboard Batch Completion Report'
+            }),
+          });
+          const report = await reportResp.json();
+          if (reportResp.ok && report.sent) {
+            status.textContent = `📨 Report sent to Telegram. Completed ${report.completed}/${report.total}`;
+          } else if (reportResp.ok) {
+            status.textContent = `Batch done, but Telegram not sent: ${report.message}`;
+          } else {
+            status.textContent = `Batch done, report send failed: ${report.detail || 'unknown error'}`;
+          }
+          setTimeout(() => status.textContent = '', 6000);
+          await refresh();
+          return;
+        }
+      } catch (e) {
+        status.textContent = `Waiting for completion... (${attempt})`;
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 3000));
+    }
+
+    status.textContent = 'Timed out waiting for task completion. Telegram report not sent.';
+    setTimeout(() => status.textContent = '', 6000);
   }
 
   async function replaySingle(taskId) {
@@ -747,18 +756,27 @@
     const btn = document.getElementById('btn-replay-all');
     btn.disabled = true;
     try {
-      const dead = await fetch(`${API}/tasks/dead`).then(r => r.json());
+      const deadResp = await fetch(`${API}/tasks/dead`);
+      const deadPayload = await deadResp.json();
+      if (!deadResp.ok) {
+        throw new Error(deadPayload.detail || `HTTP ${deadResp.status}`);
+      }
+      const dead = Array.isArray(deadPayload) ? deadPayload : [];
       if (!dead.length) {
         document.getElementById('batch-status').textContent = 'No dead tasks to replay.';
         setTimeout(() => document.getElementById('batch-status').textContent = '', 3000);
         return;
       }
       const ids = dead.map(t => t.task_id);
-      const res = await fetch(`${API}/tasks/replay-batch`, {
+      const replayResp = await fetch(`${API}/tasks/replay-batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ task_ids: ids }),
-      }).then(r => r.json());
+      });
+      const res = await replayResp.json();
+      if (!replayResp.ok) {
+        throw new Error(res.detail || `HTTP ${replayResp.status}`);
+      }
       document.getElementById('batch-status').textContent = `↩ Replayed ${res.replayed} tasks (${res.skipped} skipped)`;
       setTimeout(() => document.getElementById('batch-status').textContent = '', 4000);
       await refresh();

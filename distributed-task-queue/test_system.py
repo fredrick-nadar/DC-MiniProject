@@ -1,14 +1,16 @@
 import random
 import sys
 import time
+import os
 from collections import Counter
-
 import requests
+from telegram_reporter import send_telegram_message
 
 API_BASE = "http://localhost:8000"
 TASK_TYPES = [
     "fetch_joke", "fetch_dog", "fetch_user", "fetch_fact", "fetch_ip",
-    "fetch_product", "fetch_pokemon", "fetch_chuck", "fetch_country",
+    "fetch_product", "fetch_pokemon", "fetch_chuck", "fetch_country", "fetch_number",
+    "fetch_large_photos", "fetch_slow_httpbin",
 ]
 
 def submit_tasks(n: int = 20) -> list[str]:
@@ -64,20 +66,24 @@ def poll_until_done(task_ids: list[str], timeout_seconds: int = 600) -> dict[str
         time.sleep(3)
 
 
-def print_summary(states: dict[str, dict]) -> None:
+def build_summary(states: dict[str, dict]) -> str:
     counter = Counter(task["status"] for task in states.values())
-    print("\n=== FINAL SUMMARY ===")
-    print(f"Total tasks: {len(states)}")
+    lines = []
+    lines.append("=== FINAL SUMMARY ===")
+    lines.append(f"Total tasks: {len(states)}")
     for status, count in sorted(counter.items()):
-        print(f"- {status}: {count}")
+        lines.append(f"- {status}: {count}")
 
     dead_tasks = [t for t in states.values() if t["status"] == "DEAD"]
     if dead_tasks:
-        print("\nDead Tasks:")
+        lines.append("")
+        lines.append("Dead Tasks:")
         for task in dead_tasks:
-            print(
+            lines.append(
                 f"  {task['task_id']} type={task['task_type']} retries={task['retry_count']}/{task['max_retries']} error={task.get('error_message')}"
             )
+
+    return "\n".join(lines)
 
 
 def main() -> int:
@@ -86,7 +92,16 @@ def main() -> int:
         task_ids = submit_tasks(20)
         print("Polling task states until terminal...")
         states = poll_until_done(task_ids)
-        print_summary(states)
+        summary = build_summary(states)
+        print("\n" + summary)
+
+        # Auto-send when Telegram credentials are configured.
+        if os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"):
+            sent = send_telegram_message(summary)
+            if sent:
+                print("\n📨 Final summary sent to Telegram.")
+            else:
+                print("\nℹ️ Final summary not sent to Telegram.")
         return 0
     except requests.RequestException as exc:
         print(f"HTTP/API error: {exc}")

@@ -3,6 +3,7 @@ import os
 import time
 from typing import Any, Optional
 
+import requests
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +23,8 @@ from models import (
     RetryTaskResponse,
     SubmitTaskRequest,
     SubmitTaskResponse,
+    TelegramReportRequest,
+    TelegramReportResponse,
 )
 from producer import TaskProducer
 
@@ -46,6 +49,32 @@ app.add_middleware(
 db = Database()
 broker = KafkaBroker(db)
 producer = TaskProducer(db, broker)
+
+
+def _send_telegram_message(message: str) -> bool:
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not bot_token or not chat_id:
+        return False
+
+    text = message.strip()
+    if not text:
+        return False
+    if len(text) > 4096:
+        text = text[:4080] + "\n\n...truncated..."
+
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    response = requests.post(
+        url,
+        json={
+            "chat_id": chat_id,
+            "text": text,
+            "disable_web_page_preview": True,
+        },
+        timeout=10,
+    )
+    response.raise_for_status()
+    return True
 
 
 @app.on_event("startup")
@@ -106,15 +135,6 @@ def submit_task(req: SubmitTaskRequest) -> SubmitTaskResponse:
 # Task Queries
 # ──────────────────────────────────────────────────────────────────────────────
 
-@app.get("/tasks/{task_id}", tags=["tasks"])
-def get_task(task_id: str) -> dict[str, Any]:
-    task = db.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    task["retry_history"] = db.get_retry_history(task_id)
-    return task
-
-
 @app.get("/tasks", tags=["tasks"])
 def list_tasks(status: Optional[str] = Query(default=None)) -> list[dict[str, Any]]:
     try:
@@ -126,14 +146,24 @@ def list_tasks(status: Optional[str] = Query(default=None)) -> list[dict[str, An
 # ──────────────────────────────────────────────────────────────────────────────
 # DLQ — Dead Letter Queue
 # ──────────────────────────────────────────────────────────────────────────────
-
 @app.get("/tasks/dead", tags=["dlq"])
+# Keep this static route above `/tasks/{task_id}` so "dead" is not
+# interpreted as a task ID by the router.
 def list_dead_tasks() -> list[dict[str, Any]]:
     """Return all DEAD tasks with their full retry history."""
     tasks = db.list_tasks(status=STATUS_DEAD)
     for task in tasks:
         task["retry_history"] = db.get_retry_history(task["task_id"])
     return tasks
+
+
+@app.get("/tasks/{task_id}", tags=["tasks"])
+def get_task(task_id: str) -> dict[str, Any]:
+    task = db.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    task["retry_history"] = db.get_retry_history(task_id)
+    return task
 
 
 @app.post("/tasks/{task_id}/retry", response_model=RetryTaskResponse, tags=["dlq"])
@@ -306,6 +336,74 @@ def queue_stats() -> dict[str, Any]:
         "total_tasks": sum(counts.values()),
         "priority_distribution": priority_dist,
     }
+
+
+@app.post("/reports/telegram/for-tasks", response_model=TelegramReportResponse, tags=["reports"])
+def send_telegram_report_for_tasks(req: TelegramReportRequest) -> TelegramReportResponse:
+    terminal_statuses = {"COMPLETED", "DEAD", "FAILED", "CANCELLED"}
+    status_counts = {"COMPLETED": 0, "DEAD": 0, "FAILED": 0, "CANCELLED": 0}
+
+    missing: list[str] = []
+    not_terminal: list[str] = []
+
+    for task_id in req.task_ids:
+        task = db.get_task(task_id)
+        if not task:
+            missing.append(task_id)
+            continue
+
+        status = str(task.get("status", ""))
+        if status not in terminal_statuses:
+            not_terminal.append(task_id)
+            continue
+        status_counts[status] += 1
+
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Task(s) not found: {missing[:5]}")
+    if not_terminal:
+        raise HTTPException(status_code=409, detail=f"Task(s) still in progress: {not_terminal[:5]}")
+
+    total = len(req.task_ids)
+    completed = status_counts["COMPLETED"]
+    dead = status_counts["DEAD"]
+    failed = status_counts["FAILED"]
+    cancelled = status_counts["CANCELLED"]
+    success_rate = (completed / total) if total else 0.0
+
+    title = req.title or "Batch Completion Report"
+    lines = [
+        title,
+        "=" * 26,
+        f"Total tasks: {total}",
+        f"Completed: {completed}",
+        f"Dead: {dead}",
+        f"Failed: {failed}",
+        f"Cancelled: {cancelled}",
+        f"Success rate: {success_rate * 100:.1f}%",
+    ]
+    message = "\n".join(lines)
+
+    sent = _send_telegram_message(message)
+    if not sent:
+        return TelegramReportResponse(
+            sent=False,
+            message="Telegram credentials not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.",
+            completed=completed,
+            dead=dead,
+            failed=failed,
+            cancelled=cancelled,
+            total=total,
+        )
+
+    return TelegramReportResponse(
+        sent=True,
+        message="Telegram report sent.",
+        completed=completed,
+        dead=dead,
+        failed=failed,
+        cancelled=cancelled,
+        total=total,
+    )
 
 
 if __name__ == "__main__":

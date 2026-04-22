@@ -68,6 +68,21 @@ class ReplayBatchRequest(BaseModel):
     patch_payload: Optional[dict[str, Any]] = None  # optional: overwrite payload on replay
 
 
+class TelegramReportRequest(BaseModel):
+    task_ids: list[str] = Field(..., min_length=1, max_length=500)
+    title: Optional[str] = Field(default="Batch Completion Report", max_length=120)
+
+
+class TelegramReportResponse(BaseModel):
+    sent: bool
+    message: str
+    completed: int
+    dead: int
+    failed: int
+    cancelled: int
+    total: int
+
+
 @dataclass
 class WorkerStatus:
     worker_id: str

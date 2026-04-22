@@ -36,15 +36,25 @@ API_ENDPOINTS: dict[str, str] = {
     "fetch_pokemon": "https://pokeapi.co/api/v2/pokemon/pikachu",
     "fetch_chuck":   "https://api.chucknorris.io/jokes/random",
     "fetch_country": "https://restcountries.com/v3.1/alpha/IN",
-    "fetch_number":  "http://numbersapi.com/random/trivia?json",
+    "fetch_number":  "https://numbersapi.com/random/trivia?json",
+    "fetch_large_photos": "https://jsonplaceholder.typicode.com/photos",
+    "fetch_slow_httpbin": "https://httpbin.org/delay/12",
 }
 
-# Failure rate per task type (5-15%) to demonstrate retry mechanics
+API_ENDPOINT_FALLBACKS: dict[str, tuple[str, ...]] = {
+    # Keep an HTTP fallback for environments where the provider only
+    # answers on port 80, but prefer HTTPS first.
+    "fetch_number": ("http://numbersapi.com/random/trivia?json",),
+}
+
+# Failure rate per task type to demonstrate retry mechanics.
+# Heavier endpoints intentionally have a higher failure rate to emulate
+# real-world instability under load.
 FAILURE_RATES: dict[str, float] = {
     "fetch_joke": 0.05, "fetch_dog": 0.05, "fetch_user": 0.10,
     "fetch_fact": 0.05, "fetch_ip": 0.05, "fetch_product": 0.10,
     "fetch_pokemon": 0.15, "fetch_chuck": 0.05, "fetch_country": 0.10,
-    "fetch_number": 0.10,
+    "fetch_number": 0.10, "fetch_large_photos": 0.20, "fetch_slow_httpbin": 0.35,
 }
 
 
@@ -73,14 +83,48 @@ class WorkerNode:
                     self.worker_id, task_type, task_id, timeout_seconds)
         if task_type not in API_ENDPOINTS:
             raise ValueError(f"Unknown task_type: {task_type}")
+
+        endpoint_candidates = (API_ENDPOINTS[task_type], *API_ENDPOINT_FALLBACKS.get(task_type, ()))
+        res: requests.Response | None = None
+        last_request_error: requests.RequestException | None = None
+
         try:
-            res = requests.get(
-                API_ENDPOINTS[task_type],
-                timeout=timeout_seconds,
-                headers={"User-Agent": "DistributedTaskQueueDemo/1.0"},
-            )
-            res.raise_for_status()
-            logger.info("Task %s OK — %s bytes", task_id, len(res.content))
+            for endpoint in endpoint_candidates:
+                try:
+                    res = requests.get(
+                        endpoint,
+                        timeout=timeout_seconds,
+                        headers={"User-Agent": "DistributedTaskQueueDemo/1.0"},
+                    )
+                    res.raise_for_status()
+                    break
+                except requests.RequestException as exc:
+                    last_request_error = exc
+                    logger.warning(
+                        "Task %s endpoint %s failed on %s: %s",
+                        task_id,
+                        endpoint,
+                        self.worker_id,
+                        exc,
+                    )
+            else:
+                raise RuntimeError(f"{task_type} API call failed: {last_request_error}")
+
+            # Extra parsing work for heavier endpoints to mimic more realistic
+            # mid-level API tasks that put pressure on worker CPU/memory.
+            if task_type == "fetch_large_photos":
+                assert res is not None
+                photos = res.json()
+                _ = sum((p.get("id", 0) or 0) for p in photos[:2000])
+            elif task_type == "fetch_slow_httpbin":
+                assert res is not None
+                payload = res.json()
+                _ = payload.get("url")
+
+            assert res is not None
+            logger.info("Task %s OK - %s bytes", task_id, len(res.content))
+        except RuntimeError:
+            raise
         except requests.RequestException as exc:
             raise RuntimeError(f"{task_type} API call failed: {exc}") from exc
         if random.random() < FAILURE_RATES.get(task_type, 0.10):

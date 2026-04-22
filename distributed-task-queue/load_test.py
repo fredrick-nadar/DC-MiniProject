@@ -22,11 +22,13 @@ from collections import defaultdict
 from typing import Any
 
 import requests
+from src.telegram_reporter import send_telegram_message
 
 API_BASE = "http://localhost:8000"
 TASK_TYPES = [
     "fetch_joke", "fetch_dog", "fetch_user", "fetch_fact", "fetch_ip",
-    "fetch_product", "fetch_pokemon", "fetch_chuck", "fetch_country",
+    "fetch_product", "fetch_pokemon", "fetch_chuck", "fetch_country", "fetch_number",
+    "fetch_large_photos", "fetch_slow_httpbin",
 ]
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -162,50 +164,52 @@ def monitor(task_ids: set[str], poll_duration: int) -> dict:
 # Summary
 # ──────────────────────────────────────────────────────────────────────────────
 
-def print_summary(task_count: int, submit_elapsed: float, metrics: dict) -> None:
+def build_summary(task_count: int, submit_elapsed: float, metrics: dict) -> str:
     samples = metrics["samples"]
     if not samples:
-        print("\nNo samples collected.")
-        return
+        return "No samples collected."
 
     final = samples[-1]
     peak_tps = max(s["tps"] for s in samples)
     avg_tps = sum(s["tps"] for s in samples) / len(samples)
     peak_lag = max(s["lag"] for s in samples)
 
-    print("\n" + "=" * 62)
-    print("  LOAD TEST SUMMARY")
-    print("=" * 62)
-    print(f"  Tasks submitted          : {task_count}")
-    print(f"  Submit throughput        : {task_count / submit_elapsed:.1f} tasks/s")
-    print(f"  Peak processing rate     : {peak_tps} tasks/s")
-    print(f"  Avg processing rate      : {avg_tps:.1f} tasks/s")
-    print(f"  Peak consumer lag        : {peak_lag} tasks")
-    print(f"  Final completed          : {final['completed']}")
-    print(f"  Final dead (DLQ)         : {final['dead']}")
+    lines = []
+    lines.append("=" * 62)
+    lines.append("  LOAD TEST SUMMARY")
+    lines.append("=" * 62)
+    lines.append(f"  Tasks submitted          : {task_count}")
+    lines.append(f"  Submit throughput        : {task_count / submit_elapsed:.1f} tasks/s")
+    lines.append(f"  Peak processing rate     : {peak_tps} tasks/s")
+    lines.append(f"  Avg processing rate      : {avg_tps:.1f} tasks/s")
+    lines.append(f"  Peak consumer lag        : {peak_lag} tasks")
+    lines.append(f"  Final completed          : {final['completed']}")
+    lines.append(f"  Final dead (DLQ)         : {final['dead']}")
     success = final['completed'] / max(final['completed'] + final['dead'], 1)
-    print(f"  Overall success rate     : {success*100:.1f}%")
+    lines.append(f"  Overall success rate     : {success*100:.1f}%")
     if metrics["first_dead_at"]:
-        print(f"  Time to first failure    : {metrics['first_dead_at']:.1f}s")
+        lines.append(f"  Time to first failure    : {metrics['first_dead_at']:.1f}s")
     if metrics["all_done_at"]:
-        print(f"  Time to all terminal     : {metrics['all_done_at']:.1f}s")
-    print("=" * 62)
+        lines.append(f"  Time to all terminal     : {metrics['all_done_at']:.1f}s")
+    lines.append("=" * 62)
 
     # Worker breakdown
     try:
         workers = _get("/workers")
-        print("\n  WORKER BREAKDOWN")
-        print(f"  {'Worker':<30} {'Done':>6} {'Retried':>8} {'Failed':>8} {'Status':>8}")
-        print("  " + "-" * 64)
+        lines.append("")
+        lines.append("  WORKER BREAKDOWN")
+        lines.append(f"  {'Worker':<30} {'Done':>6} {'Retried':>8} {'Failed':>8} {'Status':>8}")
+        lines.append("  " + "-" * 64)
         for w in workers:
-            print(
+            lines.append(
                 f"  {w['worker_id']:<30} {w['tasks_done']:>6} "
                 f"{w.get('tasks_retried', 0):>8} {w.get('tasks_failed', 0):>8} "
                 f"{w['status']:>8}"
             )
     except Exception:
-        print("  (Could not fetch worker stats)")
-    print()
+        lines.append("  (Could not fetch worker stats)")
+
+    return "\n".join(lines)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -216,6 +220,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Load test the distributed task queue.")
     parser.add_argument("--tasks", type=int, default=100, help="Number of tasks to submit (default: 100)")
     parser.add_argument("--duration", type=int, default=90, help="Seconds to monitor after submission (default: 90)")
+    parser.add_argument("--telegram-token", type=str, default=None, help="Telegram bot token (or use TELEGRAM_BOT_TOKEN)")
+    parser.add_argument("--telegram-chat-id", type=str, default=None, help="Telegram chat id (or use TELEGRAM_CHAT_ID)")
     args = parser.parse_args()
 
     print("Distributed Task Queue — Load Tester")
@@ -230,7 +236,22 @@ def main() -> None:
 
     task_ids, submit_elapsed = submit_burst(args.tasks)
     metrics = monitor(set(task_ids), args.duration)
-    print_summary(args.tasks, submit_elapsed, metrics)
+    summary = build_summary(args.tasks, submit_elapsed, metrics)
+    print("\n" + summary + "\n")
+
+    if args.telegram_token or args.telegram_chat_id:
+        sent = send_telegram_message(summary, token=args.telegram_token, chat_id=args.telegram_chat_id)
+        if sent:
+            print("📨 Summary sent to Telegram.")
+        else:
+            print("ℹ️ Telegram credentials missing. Summary not sent.")
+    else:
+        # Also supports environment-driven integration for CI/local runs.
+        sent = send_telegram_message(summary)
+        if sent:
+            print("📨 Summary sent to Telegram (env credentials).")
+        else:
+            print("ℹ️ Telegram credentials not found in current shell. Summary not sent.")
 
 
 if __name__ == "__main__":
