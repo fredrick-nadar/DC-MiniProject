@@ -128,11 +128,11 @@ Fault tolerance means:
 
 ## Retry vs Fault Tolerance
 
-| Case | Worker Alive? | Task Failed? | What Happens |
-|---|---:|---:|---|
-| Retry | Yes | Yes | Task is retried after delay |
-| Fault tolerance | No | Unknown | Stuck task is requeued |
-| Dead Letter Queue | Yes | Yes, too many times | Task becomes `DEAD` |
+| Case              | Worker Alive? |        Task Failed? | What Happens                |
+| ----------------- | ------------: | ------------------: | --------------------------- |
+| Retry             |           Yes |                 Yes | Task is retried after delay |
+| Fault tolerance   |            No |             Unknown | Stuck task is requeued      |
+| Dead Letter Queue |           Yes | Yes, too many times | Task becomes `DEAD`       |
 
 ## Dead Letter Queue Flow
 
