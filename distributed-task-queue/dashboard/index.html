@@ -930,7 +930,7 @@
     });
     const report = await reportResp.json();
     if (reportResp.ok && report.sent && report.snapshot_sent) {
-      setBatchStatus(`📸 ${session.label} snapshot sent to Telegram. Completed ${report.completed}/${report.total}`, 7000);
+      setBatchStatus(`📸 ${session.label} snapshot sent to Telegram. ${report.message} Completed ${report.completed}/${report.total}`, 8000);
     } else if (reportResp.ok && report.sent) {
       setBatchStatus(`📨 ${session.label} summary sent to Telegram. ${report.message}`, 7000);
     } else if (reportResp.ok) {

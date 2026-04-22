@@ -141,6 +141,63 @@ def _build_telegram_report_message(
     }
 
 
+def _one_line(value: Any, max_length: int = 160) -> str:
+    text = str(value or "").replace("\n", " ").replace("\r", " ").strip()
+    if not text:
+        return "-"
+    if len(text) <= max_length:
+        return text
+    return text[: max_length - 3] + "..."
+
+
+def _build_dlq_details_message(max_tasks: int = 10) -> str:
+    dead_tasks = db.list_tasks(status=STATUS_DEAD)
+    lines = [
+        "Dead Letter Queue",
+        "=" * 17,
+        f"Total dead tasks: {len(dead_tasks)}",
+    ]
+
+    if not dead_tasks:
+        lines.append("No dead tasks currently in the DLQ.")
+        return "\n".join(lines)
+
+    for index, task in enumerate(dead_tasks[:max_tasks], start=1):
+        task_id = task.get("task_id", "-")
+        task_type = task.get("task_type", "-")
+        priority = task.get("priority", "-")
+        retry_count = task.get("retry_count", "-")
+        max_retries = task.get("max_retries", "-")
+        worker_id = task.get("worker_id") or "-"
+        died_at = _format_report_time(task.get("completed_at")) or "-"
+        last_error = _one_line(task.get("error_message"), max_length=180)
+
+        lines.extend(
+            [
+                "",
+                f"{index}. {task_type}",
+                f"Task ID: {task_id}",
+                f"Priority: {priority} | Retries: {retry_count}/{max_retries}",
+                f"Worker: {worker_id}",
+                f"Died at: {died_at}",
+                f"Last error: {last_error}",
+            ]
+        )
+
+    remaining = len(dead_tasks) - max_tasks
+    if remaining > 0:
+        lines.append("")
+        lines.append(f"...and {remaining} more dead task(s) in the DLQ.")
+
+    return "\n".join(lines)
+
+
+def _combine_report_messages(message: str, followup_message: Optional[str]) -> str:
+    if followup_message:
+        return f"{message}\n\n{followup_message}"
+    return message
+
+
 def _decode_snapshot_data_url(data_url: str) -> tuple[bytes, str, str]:
     if not data_url.startswith("data:image/") or "," not in data_url:
         raise ValueError("snapshot_data_url must be an image data URL")
@@ -159,6 +216,7 @@ def _dispatch_telegram_report(
     message: str,
     *,
     snapshot_data_url: Optional[str] = None,
+    followup_message: Optional[str] = None,
 ) -> tuple[bool, bool, str]:
     snapshot_sent = False
 
@@ -172,11 +230,20 @@ def _dispatch_telegram_report(
                 mime_type=mime_type,
             )
             if snapshot_sent:
+                if followup_message:
+                    try:
+                        followup_sent = send_telegram_message(followup_message)
+                        if followup_sent:
+                            return True, True, "Telegram snapshot report and DLQ details sent."
+                        return True, True, "Telegram snapshot report sent. DLQ details were not sent."
+                    except Exception:
+                        logger.exception("Failed to send Telegram DLQ details after snapshot")
+                        return True, True, "Telegram snapshot report sent. DLQ details failed."
                 return True, True, "Telegram snapshot report sent."
         except Exception:
             logger.exception("Failed to send Telegram snapshot report; falling back to text")
 
-    sent = send_telegram_message(message)
+    sent = send_telegram_message(_combine_report_messages(message, followup_message))
     if sent:
         fallback_message = "Telegram text report sent." if not snapshot_data_url else "Telegram text report sent (snapshot fallback used)."
         return True, snapshot_sent, fallback_message
@@ -536,9 +603,11 @@ def send_telegram_session_report(req: TelegramSessionReportRequest) -> TelegramR
         session_started_at=req.session_started_at,
         session_closed_at=req.session_closed_at,
     )
+    dlq_details = _build_dlq_details_message()
     sent, snapshot_sent, response_message = _dispatch_telegram_report(
         message,
         snapshot_data_url=req.snapshot_data_url,
+        followup_message=dlq_details,
     )
     return TelegramReportResponse(
         sent=sent,
