@@ -1,9 +1,10 @@
+import base64
+import binascii
 import logging
 import os
 import time
 from typing import Any, Optional
 
-import requests
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,14 +20,18 @@ from config import (
 )
 from database import Database
 from models import (
+    FaultSimulationRequest,
+    FaultSimulationResponse,
     ReplayBatchRequest,
     RetryTaskResponse,
     SubmitTaskRequest,
     SubmitTaskResponse,
     TelegramReportRequest,
     TelegramReportResponse,
+    TelegramSessionReportRequest,
 )
 from producer import TaskProducer
+from telegram_reporter import send_telegram_message, send_telegram_photo
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
@@ -51,30 +56,132 @@ broker = KafkaBroker(db)
 producer = TaskProducer(db, broker)
 
 
-def _send_telegram_message(message: str) -> bool:
-    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    if not bot_token or not chat_id:
-        return False
+def _format_report_time(ts: Optional[float]) -> Optional[str]:
+    if ts is None:
+        return None
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
 
-    text = message.strip()
-    if not text:
-        return False
-    if len(text) > 4096:
-        text = text[:4080] + "\n\n...truncated..."
 
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    response = requests.post(
-        url,
-        json={
-            "chat_id": chat_id,
-            "text": text,
-            "disable_web_page_preview": True,
-        },
-        timeout=10,
+def _collect_terminal_report(task_ids: list[str]) -> tuple[dict[str, int], list[str], list[str]]:
+    terminal_statuses = {"COMPLETED", "DEAD", "FAILED", "CANCELLED"}
+    status_counts = {"COMPLETED": 0, "DEAD": 0, "FAILED": 0, "CANCELLED": 0}
+
+    missing: list[str] = []
+    not_terminal: list[str] = []
+
+    for task_id in task_ids:
+        task = db.get_task(task_id)
+        if not task:
+            missing.append(task_id)
+            continue
+
+        status = str(task.get("status", ""))
+        if status not in terminal_statuses:
+            not_terminal.append(task_id)
+            continue
+        status_counts[status] += 1
+
+    return status_counts, missing, not_terminal
+
+
+def _build_telegram_report_message(
+    task_ids: list[str],
+    title: Optional[str],
+    *,
+    session_label: Optional[str] = None,
+    session_started_at: Optional[float] = None,
+    session_closed_at: Optional[float] = None,
+) -> tuple[str, dict[str, int]]:
+    status_counts, missing, not_terminal = _collect_terminal_report(task_ids)
+
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Task(s) not found: {missing[:5]}")
+    if not_terminal:
+        raise HTTPException(status_code=409, detail=f"Task(s) still in progress: {not_terminal[:5]}")
+
+    total = len(task_ids)
+    completed = status_counts["COMPLETED"]
+    dead = status_counts["DEAD"]
+    failed = status_counts["FAILED"]
+    cancelled = status_counts["CANCELLED"]
+    success_rate = (completed / total) if total else 0.0
+
+    started_text = _format_report_time(session_started_at)
+    closed_text = _format_report_time(session_closed_at)
+
+    lines = [
+        title or "Batch Completion Report",
+        "=" * 26,
+    ]
+    if session_label:
+        lines.append(f"Session: {session_label}")
+    if started_text:
+        lines.append(f"Started: {started_text}")
+    if closed_text:
+        lines.append(f"Sealed: {closed_text}")
+    if session_started_at is not None and session_closed_at is not None and session_closed_at >= session_started_at:
+        lines.append(f"Grouping window: {session_closed_at - session_started_at:.1f}s")
+    lines.extend(
+        [
+            f"Total tasks: {total}",
+            f"Completed: {completed}",
+            f"Dead: {dead}",
+            f"Failed: {failed}",
+            f"Cancelled: {cancelled}",
+            f"Success rate: {success_rate * 100:.1f}%",
+        ]
     )
-    response.raise_for_status()
-    return True
+
+    return "\n".join(lines), {
+        "completed": completed,
+        "dead": dead,
+        "failed": failed,
+        "cancelled": cancelled,
+        "total": total,
+    }
+
+
+def _decode_snapshot_data_url(data_url: str) -> tuple[bytes, str, str]:
+    if not data_url.startswith("data:image/") or "," not in data_url:
+        raise ValueError("snapshot_data_url must be an image data URL")
+
+    header, encoded = data_url.split(",", 1)
+    mime_type = header.split(";")[0].split(":", 1)[1]
+    extension = mime_type.split("/", 1)[1] if "/" in mime_type else "png"
+    try:
+        image_bytes = base64.b64decode(encoded)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("snapshot_data_url is not valid base64 image data") from exc
+    return image_bytes, mime_type, f"session-report.{extension}"
+
+
+def _dispatch_telegram_report(
+    message: str,
+    *,
+    snapshot_data_url: Optional[str] = None,
+) -> tuple[bool, bool, str]:
+    snapshot_sent = False
+
+    if snapshot_data_url:
+        try:
+            image_bytes, mime_type, filename = _decode_snapshot_data_url(snapshot_data_url)
+            snapshot_sent = send_telegram_photo(
+                image_bytes,
+                caption=message,
+                filename=filename,
+                mime_type=mime_type,
+            )
+            if snapshot_sent:
+                return True, True, "Telegram snapshot report sent."
+        except Exception:
+            logger.exception("Failed to send Telegram snapshot report; falling back to text")
+
+    sent = send_telegram_message(message)
+    if sent:
+        fallback_message = "Telegram text report sent." if not snapshot_data_url else "Telegram text report sent (snapshot fallback used)."
+        return True, snapshot_sent, fallback_message
+
+    return False, snapshot_sent, "Telegram credentials not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID."
 
 
 @app.on_event("startup")
@@ -303,6 +410,72 @@ def list_workers() -> list[dict[str, Any]]:
     return workers
 
 
+@app.post("/faults/simulate-worker-crash", response_model=FaultSimulationResponse, tags=["faults"])
+def simulate_worker_crash(req: FaultSimulationRequest) -> FaultSimulationResponse:
+    now = time.time()
+    heartbeats = broker.get_worker_heartbeats()
+    alive_workers = {
+        worker_id
+        for worker_id, heartbeat in heartbeats.items()
+        if heartbeat and (now - heartbeat) <= WORKER_TIMEOUT_SECONDS
+    }
+    if not alive_workers:
+        raise HTTPException(status_code=409, detail="No alive workers available to simulate a crash")
+
+    in_progress = db.get_in_progress_tasks()
+    target_worker_id = req.worker_id
+    target_task_id: Optional[str] = None
+    worker_had_in_progress_task = False
+
+    if target_worker_id:
+        if target_worker_id not in heartbeats:
+            raise HTTPException(status_code=404, detail="Worker not found")
+        if target_worker_id not in alive_workers:
+            raise HTTPException(status_code=409, detail="Selected worker is not currently alive")
+        for task in in_progress:
+            if task.get("worker_id") == target_worker_id:
+                target_task_id = task["task_id"]
+                worker_had_in_progress_task = True
+                break
+    else:
+        for task in in_progress:
+            worker_id = task.get("worker_id")
+            if worker_id in alive_workers:
+                target_worker_id = worker_id
+                target_task_id = task["task_id"]
+                worker_had_in_progress_task = True
+                break
+        if not target_worker_id:
+            target_worker_id = sorted(alive_workers)[0]
+
+    assert target_worker_id is not None
+    reason = (
+        f"Simulated crash requested for {target_worker_id}"
+        + (f" while processing task {target_task_id}" if target_task_id else " while idle")
+    )
+    db.issue_worker_command(
+        target_worker_id,
+        "crash",
+        payload={
+            "reason": reason,
+            "requested_at": now,
+        },
+    )
+    db.log_event(
+        "worker_fault_requested",
+        reason,
+        task_id=target_task_id,
+        worker_id=target_worker_id,
+    )
+
+    return FaultSimulationResponse(
+        worker_id=target_worker_id,
+        message=reason,
+        target_task_id=target_task_id,
+        worker_had_in_progress_task=worker_had_in_progress_task,
+    )
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Queue Stats
 # ──────────────────────────────────────────────────────────────────────────────
@@ -340,69 +513,42 @@ def queue_stats() -> dict[str, Any]:
 
 @app.post("/reports/telegram/for-tasks", response_model=TelegramReportResponse, tags=["reports"])
 def send_telegram_report_for_tasks(req: TelegramReportRequest) -> TelegramReportResponse:
-    terminal_statuses = {"COMPLETED", "DEAD", "FAILED", "CANCELLED"}
-    status_counts = {"COMPLETED": 0, "DEAD": 0, "FAILED": 0, "CANCELLED": 0}
-
-    missing: list[str] = []
-    not_terminal: list[str] = []
-
-    for task_id in req.task_ids:
-        task = db.get_task(task_id)
-        if not task:
-            missing.append(task_id)
-            continue
-
-        status = str(task.get("status", ""))
-        if status not in terminal_statuses:
-            not_terminal.append(task_id)
-            continue
-        status_counts[status] += 1
-
-    if missing:
-        raise HTTPException(status_code=404, detail=f"Task(s) not found: {missing[:5]}")
-    if not_terminal:
-        raise HTTPException(status_code=409, detail=f"Task(s) still in progress: {not_terminal[:5]}")
-
-    total = len(req.task_ids)
-    completed = status_counts["COMPLETED"]
-    dead = status_counts["DEAD"]
-    failed = status_counts["FAILED"]
-    cancelled = status_counts["CANCELLED"]
-    success_rate = (completed / total) if total else 0.0
-
-    title = req.title or "Batch Completion Report"
-    lines = [
-        title,
-        "=" * 26,
-        f"Total tasks: {total}",
-        f"Completed: {completed}",
-        f"Dead: {dead}",
-        f"Failed: {failed}",
-        f"Cancelled: {cancelled}",
-        f"Success rate: {success_rate * 100:.1f}%",
-    ]
-    message = "\n".join(lines)
-
-    sent = _send_telegram_message(message)
-    if not sent:
-        return TelegramReportResponse(
-            sent=False,
-            message="Telegram credentials not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.",
-            completed=completed,
-            dead=dead,
-            failed=failed,
-            cancelled=cancelled,
-            total=total,
-        )
-
+    message, stats = _build_telegram_report_message(req.task_ids, req.title)
+    sent, snapshot_sent, response_message = _dispatch_telegram_report(message)
     return TelegramReportResponse(
-        sent=True,
-        message="Telegram report sent.",
-        completed=completed,
-        dead=dead,
-        failed=failed,
-        cancelled=cancelled,
-        total=total,
+        sent=sent,
+        message=response_message,
+        completed=stats["completed"],
+        dead=stats["dead"],
+        failed=stats["failed"],
+        cancelled=stats["cancelled"],
+        total=stats["total"],
+        snapshot_sent=snapshot_sent,
+    )
+
+
+@app.post("/reports/telegram/session", response_model=TelegramReportResponse, tags=["reports"])
+def send_telegram_session_report(req: TelegramSessionReportRequest) -> TelegramReportResponse:
+    message, stats = _build_telegram_report_message(
+        req.task_ids,
+        req.title,
+        session_label=req.session_label,
+        session_started_at=req.session_started_at,
+        session_closed_at=req.session_closed_at,
+    )
+    sent, snapshot_sent, response_message = _dispatch_telegram_report(
+        message,
+        snapshot_data_url=req.snapshot_data_url,
+    )
+    return TelegramReportResponse(
+        sent=sent,
+        message=response_message,
+        completed=stats["completed"],
+        dead=stats["dead"],
+        failed=stats["failed"],
+        cancelled=stats["cancelled"],
+        total=stats["total"],
+        snapshot_sent=snapshot_sent,
     )
 
 

@@ -108,10 +108,30 @@ class WorkerNode:
         self.broker = KafkaBroker(self.db)
         self._stop_event = threading.Event()
 
+    def _check_for_forced_crash(self) -> None:
+        command = self.db.consume_worker_command(self.worker_id, expected_command="crash")
+        if not command:
+            return
+
+        payload = command.get("payload", {})
+        reason = payload.get("reason", "Manual fault simulation requested")
+        logger.error("Worker %s exiting due to simulated crash command: %s", self.worker_id, reason)
+        try:
+            self.db.log_event(
+                "worker_fault_simulated",
+                reason,
+                worker_id=self.worker_id,
+            )
+        finally:
+            # Exit immediately to mimic a dead process: no graceful unlocks,
+            # no final heartbeats, and fault recovery must reclaim the task.
+            os._exit(0)
+
     def start_heartbeat(self) -> threading.Thread:
         def _loop() -> None:
             while not self._stop_event.is_set():
                 try:
+                    self._check_for_forced_crash()
                     self.broker.set_worker_heartbeat(self.worker_id)
                 except Exception:
                     logger.exception("Failed heartbeat for worker %s", self.worker_id)
@@ -188,6 +208,7 @@ class WorkerNode:
         connection_backoff = 1
         while not self._stop_event.is_set():
             try:
+                self._check_for_forced_crash()
                 raw_task = self.broker.pop_active_task(timeout_seconds=5)
                 connection_backoff = 1
                 if not raw_task:

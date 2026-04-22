@@ -90,6 +90,14 @@ class Database:
                     payload TEXT NOT NULL,
                     execute_after REAL NOT NULL
                 );
+
+                -- Control plane commands for live worker fault simulation
+                CREATE TABLE IF NOT EXISTS worker_commands (
+                    worker_id TEXT PRIMARY KEY,
+                    command TEXT NOT NULL,
+                    payload TEXT,
+                    created_at REAL NOT NULL
+                );
                 """
             )
             # Safe migration: add new columns if this is an existing database
@@ -337,6 +345,54 @@ class Database:
             return {}
         return json.loads(row["stats"])
 
+    def issue_worker_command(
+        self,
+        worker_id: str,
+        command: str,
+        payload: Optional[dict[str, Any]] = None,
+    ) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO worker_commands (worker_id, command, payload, created_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(worker_id) DO UPDATE SET
+                    command = excluded.command,
+                    payload = excluded.payload,
+                    created_at = excluded.created_at
+                """,
+                (worker_id, command, json.dumps(payload or {}), time.time()),
+            )
+            conn.commit()
+
+    def consume_worker_command(
+        self,
+        worker_id: str,
+        expected_command: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT worker_id, command, payload, created_at FROM worker_commands WHERE worker_id = ?",
+                (worker_id,),
+            ).fetchone()
+            if not row:
+                return None
+
+            command = row["command"]
+            if expected_command is not None and command != expected_command:
+                return None
+
+            conn.execute("DELETE FROM worker_commands WHERE worker_id = ?", (worker_id,))
+            conn.commit()
+
+        payload = json.loads(row["payload"]) if row["payload"] else {}
+        return {
+            "worker_id": row["worker_id"],
+            "command": command,
+            "payload": payload,
+            "created_at": row["created_at"],
+        }
+
     # -----------------------------------------------------------------------
     # Task locks (replaces Redis SET NX)
     # -----------------------------------------------------------------------
@@ -362,6 +418,16 @@ class Database:
     def release_task_lock(self, task_id: str) -> None:
         with self._lock, self._connect() as conn:
             conn.execute("DELETE FROM task_locks WHERE task_id = ?", (task_id,))
+            conn.commit()
+
+    def force_acquire_task_lock(self, task_id: str, owner: str, ttl_seconds: int = 120) -> None:
+        expires_at = time.time() + ttl_seconds
+        with self._lock, self._connect() as conn:
+            conn.execute("DELETE FROM task_locks WHERE task_id = ?", (task_id,))
+            conn.execute(
+                "INSERT INTO task_locks (task_id, owner, expires_at) VALUES (?, ?, ?)",
+                (task_id, owner, expires_at),
+            )
             conn.commit()
 
     # -----------------------------------------------------------------------
@@ -425,9 +491,9 @@ class Database:
                 DELETE FROM delayed_tasks;
                 DELETE FROM task_locks;
                 DELETE FROM worker_heartbeats;
+                DELETE FROM worker_commands;
                 DELETE FROM sqlite_sequence;
                 """
             )
             conn.commit()
         return count
-

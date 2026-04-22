@@ -63,6 +63,17 @@ class RetryTaskResponse(BaseModel):
     message: str
 
 
+class FaultSimulationRequest(BaseModel):
+    worker_id: Optional[str] = None
+
+
+class FaultSimulationResponse(BaseModel):
+    worker_id: str
+    message: str
+    target_task_id: Optional[str] = None
+    worker_had_in_progress_task: bool = False
+
+
 class ReplayBatchRequest(BaseModel):
     task_ids: list[str] = Field(..., min_length=1, max_length=100)
     patch_payload: Optional[dict[str, Any]] = None  # optional: overwrite payload on replay
@@ -81,6 +92,16 @@ class TelegramReportResponse(BaseModel):
     failed: int
     cancelled: int
     total: int
+    snapshot_sent: bool = False
+
+
+class TelegramSessionReportRequest(BaseModel):
+    task_ids: list[str] = Field(..., min_length=1, max_length=500)
+    title: Optional[str] = Field(default="Dashboard Session Report", max_length=120)
+    session_label: Optional[str] = Field(default=None, max_length=120)
+    session_started_at: Optional[float] = None
+    session_closed_at: Optional[float] = None
+    snapshot_data_url: Optional[str] = None
 
 
 @dataclass

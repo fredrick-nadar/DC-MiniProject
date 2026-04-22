@@ -195,6 +195,64 @@
     .retry-history { padding: 8px 12px; background: #f8f9fa; border: 1px solid var(--border); border-radius: 4px; margin-top: 6px; font-size: 12px; color: var(--text-muted); }
     .retry-row { padding: 4px 0; border-bottom: 1px solid var(--border); }
     .retry-row:last-child { border: none; }
+    .retry-row strong { color: var(--text-primary); }
+    .retry-reason { margin-top: 4px; white-space: pre-wrap; word-break: break-word; }
+    .dlq-task-main { display: flex; flex-direction: column; gap: 4px; }
+    .dlq-task-id { color: var(--text-primary); font-weight: 700; }
+    .dlq-task-sub { font-size: 11px; color: var(--text-muted); word-break: break-all; }
+    .dlq-details-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 10px; margin-bottom: 12px;
+    }
+    .detail-card {
+      background: #ffffff; border: 1px solid var(--border);
+      border-radius: 4px; padding: 10px 12px;
+    }
+    .detail-label {
+      font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px;
+      color: var(--text-muted); font-weight: 700; margin-bottom: 6px;
+    }
+    .detail-value {
+      font-size: 12px; color: var(--text-primary);
+      word-break: break-word; white-space: pre-wrap;
+    }
+    .detail-section-label {
+      font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px;
+      color: var(--text-muted); font-weight: 700; margin: 12px 0 6px;
+    }
+    .error-block {
+      background: #fff1f2; border: 1px solid #fecdd3; border-radius: 4px;
+      padding: 10px 12px; color: #9f1239; white-space: pre-wrap; word-break: break-word;
+    }
+    .payload-preview {
+      margin: 0; padding: 10px 12px; border-radius: 4px;
+      background: #ffffff; border: 1px solid var(--border);
+      max-height: 190px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+      color: var(--text-primary);
+    }
+    .toast-stack {
+      position: fixed; top: 18px; right: 18px; z-index: 1200;
+      display: flex; flex-direction: column; gap: 10px;
+      width: min(390px, calc(100vw - 36px));
+      pointer-events: none;
+    }
+    .toast {
+      pointer-events: auto; background: #ffffff; border: 1px solid var(--border);
+      border-left: 4px solid var(--accent-blue); border-radius: 6px;
+      padding: 12px 14px; box-shadow: 0 14px 32px rgba(15, 23, 42, 0.12);
+      opacity: 0; transform: translateY(-8px); transition: opacity 0.18s ease, transform 0.18s ease;
+      cursor: pointer;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast-info { border-left-color: var(--accent-blue); }
+    .toast-success { border-left-color: var(--accent-green); }
+    .toast-warning { border-left-color: var(--accent-yellow); }
+    .toast-danger { border-left-color: var(--accent-red); }
+    .toast-title { font-size: 13px; font-weight: 700; color: var(--text-primary); }
+    .toast-body {
+      margin-top: 6px; font-size: 12px; line-height: 1.45;
+      color: var(--text-secondary); white-space: pre-line; word-break: break-word;
+    }
 
     /* ── Misc ── */
     .empty-state { text-align: center; padding: 40px; color: var(--text-muted); font-size: 14px; }
@@ -249,6 +307,10 @@
     <button class="btn btn-primary" id="btn-batch" onclick="submitBatch(10)">
       <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M7.5 1v13M1 7.5h13"/></svg>
       Submit Batch (10)
+    </button>
+    <button class="btn btn-danger" onclick="simulateWorkerFault()" id="btn-simulate-fault">
+      <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M7.5 1.5v6M7.5 11.5h.01M2 13.5h11L8.6 2.7a1.2 1.2 0 0 0-2.2 0L2 13.5Z"/></svg>
+      Simulate Worker Fault
     </button>
     <button class="btn btn-warning" onclick="replayAllDead()" id="btn-replay-all">
       <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M1 4h9a4 4 0 0 1 0 8H1M4 1L1 4l3 3"/></svg>
@@ -346,6 +408,8 @@
 
 </div>
 
+<div class="toast-stack" id="toast-stack" aria-live="polite" aria-atomic="false"></div>
+
 <!-- Confirmation Modal -->
 <div class="modal-overlay" id="clear-modal">
   <div class="modal">
@@ -365,6 +429,17 @@
     "fetch_product", "fetch_pokemon", "fetch_chuck", "fetch_country", "fetch_number",
     "fetch_large_photos", "fetch_slow_httpbin"
   ];
+  const TERMINAL_STATUSES = new Set(['COMPLETED', 'DEAD', 'FAILED', 'CANCELLED']);
+  const SESSION_DEBOUNCE_MS = 8000;
+  const SESSION_POLL_MS = 3000;
+
+  let batchStatusResetHandle = null;
+  let telegramSessionCounter = 0;
+  let openTelegramSessionId = null;
+  let openTelegramSessionDebounceHandle = null;
+  const telegramSessions = new Map();
+  const latestDeadTasks = new Map();
+  const replayedDeadTasks = new Map();
 
   // ── Chart Setup ───────────────────────────────────────────────────────────
 
@@ -487,6 +562,429 @@
     setTimeout(() => { el.style.transition = 'transform 0.3s'; el.style.transform = 'scale(1)'; }, 20);
   }
 
+  function setBatchStatus(message, clearAfterMs = 0) {
+    const status = document.getElementById('batch-status');
+    status.textContent = message;
+    if (batchStatusResetHandle) {
+      clearTimeout(batchStatusResetHandle);
+      batchStatusResetHandle = null;
+    }
+    if (clearAfterMs > 0) {
+      batchStatusResetHandle = setTimeout(() => {
+        if (status.textContent === message) {
+          status.textContent = '';
+        }
+      }, clearAfterMs);
+    }
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    }[char]));
+  }
+
+  function truncateMiddle(value, head = 8, tail = 4) {
+    const text = String(value ?? '');
+    if (!text) return '-';
+    if (text.length <= head + tail + 3) return text;
+    return `${text.slice(0, head)}...${text.slice(-tail)}`;
+  }
+
+  function summarizeText(value, maxLength = 140) {
+    const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+    if (!text) return '-';
+    return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
+  }
+
+  function formatJsonBlock(value) {
+    try {
+      return JSON.stringify(value ?? {}, null, 2);
+    } catch {
+      return String(value ?? '{}');
+    }
+  }
+
+  function formatTaskMeta(task) {
+    const bits = [];
+    if (task?.task_type) bits.push(task.task_type);
+    if (typeof task?.priority === 'number') bits.push(`priority ${task.priority}`);
+    if (typeof task?.max_retries === 'number') bits.push(`max retries ${task.max_retries}`);
+    return bits.join(' | ');
+  }
+
+  function showToast(title, body = '', variant = 'info', durationMs = 7000) {
+    const stack = document.getElementById('toast-stack');
+    if (!stack) return;
+
+    while (stack.children.length >= 5) {
+      stack.firstElementChild.remove();
+    }
+
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${variant}`;
+    toast.innerHTML = `
+      <div class="toast-title">${escapeHtml(title)}</div>
+      ${body ? `<div class="toast-body">${escapeHtml(body)}</div>` : ''}
+    `;
+    stack.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add('show'));
+
+    let removed = false;
+    const dismiss = () => {
+      if (removed) return;
+      removed = true;
+      toast.classList.remove('show');
+      setTimeout(() => toast.remove(), 220);
+    };
+
+    const timer = setTimeout(dismiss, durationMs);
+    toast.addEventListener('click', () => {
+      clearTimeout(timer);
+      dismiss();
+    });
+  }
+
+  function rememberDeadTasks(tasks) {
+    latestDeadTasks.clear();
+    tasks.forEach(task => {
+      if (task?.task_id) latestDeadTasks.set(task.task_id, task);
+    });
+  }
+
+  function trackReplayedDeadTask(task) {
+    if (!task?.task_id) return;
+    replayedDeadTasks.set(task.task_id, {
+      task_id: task.task_id,
+      task_type: task.task_type || null,
+      priority: typeof task.priority === 'number' ? task.priority : null,
+      max_retries: typeof task.max_retries === 'number' ? task.max_retries : null,
+      lastStatus: 'DEAD',
+      lastRetryCount: 0,
+    });
+  }
+
+  function trackReplayedDeadTasks(tasks) {
+    tasks.forEach(trackReplayedDeadTask);
+  }
+
+  function resetReplayTracking() {
+    latestDeadTasks.clear();
+    replayedDeadTasks.clear();
+  }
+
+  function syncReplayedDeadTaskStates(tasks) {
+    if (!replayedDeadTasks.size) return;
+
+    const tasksById = new Map(tasks.map(task => [task.task_id, task]));
+    for (const [taskId, tracked] of Array.from(replayedDeadTasks.entries())) {
+      const task = tasksById.get(taskId);
+      if (!task) continue;
+
+      tracked.task_type = task.task_type || tracked.task_type;
+      tracked.priority = typeof task.priority === 'number' ? task.priority : tracked.priority;
+      tracked.max_retries = typeof task.max_retries === 'number' ? task.max_retries : tracked.max_retries;
+
+      if (task.status === 'IN_PROGRESS' && tracked.lastStatus !== 'IN_PROGRESS') {
+        const body = [
+          `Task ID: ${task.task_id}`,
+          formatTaskMeta(task),
+          task.worker_id ? `Worker: ${task.worker_id}` : '',
+        ].filter(Boolean).join('\n');
+        showToast('Dead task retry started', body, 'info', 8000);
+      }
+
+      if (task.status === 'PENDING' && (task.retry_count || 0) > tracked.lastRetryCount) {
+        const body = [
+          `Task ID: ${task.task_id}`,
+          `Retry ${task.retry_count}/${task.max_retries}`,
+          summarizeText(task.error_message || 'Worker scheduled another retry after replay.', 180),
+        ].join('\n');
+        showToast('Replayed dead task scheduled again', body, 'warning', 9500);
+      }
+
+      if (task.status === 'COMPLETED' && tracked.lastStatus !== 'COMPLETED') {
+        const body = [
+          `Task ID: ${task.task_id}`,
+          formatTaskMeta(task),
+        ].filter(Boolean).join('\n');
+        showToast('Replayed dead task completed', body, 'success', 9000);
+        replayedDeadTasks.delete(taskId);
+        continue;
+      }
+
+      if (task.status === 'DEAD' && tracked.lastStatus !== 'DEAD') {
+        latestDeadTasks.set(task.task_id, task);
+        const body = [
+          `Task ID: ${task.task_id}`,
+          summarizeText(task.error_message || 'Retries exhausted again after replay.', 180),
+        ].join('\n');
+        showToast('Replayed dead task died again', body, 'danger', 10000);
+        replayedDeadTasks.delete(taskId);
+        continue;
+      }
+
+      if (task.status === 'CANCELLED' && tracked.lastStatus !== 'CANCELLED') {
+        const body = [
+          `Task ID: ${task.task_id}`,
+          formatTaskMeta(task),
+        ].filter(Boolean).join('\n');
+        showToast('Replayed dead task was cancelled', body, 'warning', 8500);
+        replayedDeadTasks.delete(taskId);
+        continue;
+      }
+
+      tracked.lastStatus = task.status;
+      tracked.lastRetryCount = task.retry_count || 0;
+      replayedDeadTasks.set(taskId, tracked);
+    }
+  }
+
+  function countSessionStatuses(states) {
+    return states.reduce((acc, task) => {
+      const status = task?.status || 'UNKNOWN';
+      acc[status] = (acc[status] || 0) + 1;
+      return acc;
+    }, {});
+  }
+
+  function createTelegramSession() {
+    telegramSessionCounter += 1;
+    const sessionId = `session-${Date.now()}-${telegramSessionCounter}`;
+    const session = {
+      id: sessionId,
+      label: `Session ${telegramSessionCounter}`,
+      taskIds: [],
+      taskIdSet: new Set(),
+      startedAt: Date.now() / 1000,
+      sealedAt: null,
+      sent: false,
+      checking: false,
+      checkHandle: null,
+    };
+    telegramSessions.set(sessionId, session);
+    openTelegramSessionId = sessionId;
+    return session;
+  }
+
+  function getOpenTelegramSession() {
+    if (openTelegramSessionId) {
+      const session = telegramSessions.get(openTelegramSessionId);
+      if (session && !session.sealedAt) return session;
+    }
+    return createTelegramSession();
+  }
+
+  function scheduleTelegramSessionSeal() {
+    if (openTelegramSessionDebounceHandle) {
+      clearTimeout(openTelegramSessionDebounceHandle);
+    }
+    openTelegramSessionDebounceHandle = setTimeout(() => {
+      sealOpenTelegramSession();
+    }, SESSION_DEBOUNCE_MS);
+  }
+
+  function addTasksToTelegramSession(taskIds) {
+    if (!taskIds.length) return;
+
+    const session = getOpenTelegramSession();
+    taskIds.forEach(taskId => {
+      if (!session.taskIdSet.has(taskId)) {
+        session.taskIdSet.add(taskId);
+        session.taskIds.push(taskId);
+      }
+    });
+    scheduleTelegramSessionSeal();
+    setBatchStatus(
+      `${session.label} collecting tasks (${session.taskIds.length} total). Waiting ${Math.round(SESSION_DEBOUNCE_MS / 1000)}s for more batches...`
+    );
+  }
+
+  function sealOpenTelegramSession() {
+    if (!openTelegramSessionId) return;
+
+    const session = telegramSessions.get(openTelegramSessionId);
+    openTelegramSessionId = null;
+    if (openTelegramSessionDebounceHandle) {
+      clearTimeout(openTelegramSessionDebounceHandle);
+      openTelegramSessionDebounceHandle = null;
+    }
+    if (!session || session.sealedAt || !session.taskIds.length) return;
+
+    session.sealedAt = Date.now() / 1000;
+    setBatchStatus(`${session.label} sealed with ${session.taskIds.length} task(s). Waiting for completion...`);
+    scheduleTelegramSessionCheck(session, 1000);
+  }
+
+  function resetTelegramSessions() {
+    if (openTelegramSessionDebounceHandle) {
+      clearTimeout(openTelegramSessionDebounceHandle);
+      openTelegramSessionDebounceHandle = null;
+    }
+    openTelegramSessionId = null;
+    for (const session of telegramSessions.values()) {
+      if (session.checkHandle) {
+        clearTimeout(session.checkHandle);
+      }
+    }
+    telegramSessions.clear();
+  }
+
+  function scheduleTelegramSessionCheck(session, delayMs = SESSION_POLL_MS) {
+    if (!session || session.sent || session.checkHandle) return;
+    session.checkHandle = setTimeout(() => {
+      session.checkHandle = null;
+      checkTelegramSessionCompletion(session.id);
+    }, delayMs);
+  }
+
+  async function waitForChartPaint() {
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  }
+
+  function drawSnapshotCard(ctx, canvas, title, x, y, width, height) {
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#dee2e6';
+    ctx.lineWidth = 2;
+    ctx.fillRect(x, y, width, height);
+    ctx.strokeRect(x, y, width, height);
+    ctx.fillStyle = '#212529';
+    ctx.font = '600 26px Inter, sans-serif';
+    ctx.fillText(title, x + 18, y + 34);
+    ctx.drawImage(canvas, x + 12, y + 52, width - 24, height - 64);
+  }
+
+  function buildTelegramSessionSnapshot(session, states) {
+    const summary = countSessionStatuses(states);
+    const canvas = document.createElement('canvas');
+    canvas.width = 1600;
+    canvas.height = 1180;
+
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#f8f9fa';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = '#212529';
+    ctx.font = '700 42px Inter, sans-serif';
+    ctx.fillText('Distributed Task Queue Session Report', 48, 68);
+
+    ctx.fillStyle = '#495057';
+    ctx.font = '500 24px Inter, sans-serif';
+    ctx.fillText(
+      `${session.label} • ${session.taskIds.length} tasks • grouped over ${Math.max(0, session.sealedAt - session.startedAt).toFixed(1)}s`,
+      48,
+      108
+    );
+
+    const chips = [
+      { label: 'Completed', value: summary.COMPLETED || 0, color: '#198754' },
+      { label: 'Dead', value: summary.DEAD || 0, color: '#dc3545' },
+      { label: 'Failed', value: summary.FAILED || 0, color: '#fd7e14' },
+      { label: 'Cancelled', value: summary.CANCELLED || 0, color: '#6c757d' },
+    ];
+    chips.forEach((chip, idx) => {
+      const x = 48 + idx * 210;
+      ctx.fillStyle = chip.color;
+      ctx.fillRect(x, 138, 170, 74);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '600 20px Inter, sans-serif';
+      ctx.fillText(chip.label, x + 14, 170);
+      ctx.font = '700 28px Inter, sans-serif';
+      ctx.fillText(String(chip.value), x + 14, 200);
+    });
+
+    drawSnapshotCard(ctx, document.getElementById('statusChart'), 'Status Distribution', 48, 250, 470, 310);
+    drawSnapshotCard(ctx, document.getElementById('priorityChart'), 'Priority Bands', 564, 250, 470, 310);
+    drawSnapshotCard(ctx, document.getElementById('workerChart'), 'Worker Throughput', 1080, 250, 470, 310);
+    drawSnapshotCard(ctx, document.getElementById('lineChart'), 'Throughput & Consumer Lag', 48, 604, 1502, 500);
+
+    return canvas.toDataURL('image/png');
+  }
+
+  async function sendTelegramSessionReport(session, states) {
+    await refresh();
+    await waitForChartPaint();
+
+    let snapshotDataUrl = null;
+    try {
+      snapshotDataUrl = buildTelegramSessionSnapshot(session, states);
+    } catch (e) {
+      console.error('Snapshot generation error:', e);
+    }
+
+    const reportResp = await fetch(`${API}/reports/telegram/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        task_ids: session.taskIds,
+        title: 'Dashboard Session Completion Report',
+        session_label: session.label,
+        session_started_at: session.startedAt,
+        session_closed_at: session.sealedAt,
+        snapshot_data_url: snapshotDataUrl,
+      }),
+    });
+    const report = await reportResp.json();
+    if (reportResp.ok && report.sent && report.snapshot_sent) {
+      setBatchStatus(`📸 ${session.label} snapshot sent to Telegram. Completed ${report.completed}/${report.total}`, 7000);
+    } else if (reportResp.ok && report.sent) {
+      setBatchStatus(`📨 ${session.label} summary sent to Telegram. ${report.message}`, 7000);
+    } else if (reportResp.ok) {
+      setBatchStatus(`${session.label} finished, but Telegram not sent: ${report.message}`, 7000);
+    } else {
+      setBatchStatus(`${session.label} finished, report send failed: ${report.detail || 'unknown error'}`, 7000);
+    }
+  }
+
+  async function checkTelegramSessionCompletion(sessionId) {
+    const session = telegramSessions.get(sessionId);
+    if (!session || session.sent || !session.sealedAt) return;
+    if (session.checking) {
+      scheduleTelegramSessionCheck(session, SESSION_POLL_MS);
+      return;
+    }
+
+    session.checking = true;
+    try {
+      const states = await Promise.all(
+        session.taskIds.map(async (taskId) => {
+          const resp = await fetch(`${API}/tasks/${taskId}`);
+          if (resp.status === 404) {
+            return { task_id: taskId, status: 'MISSING' };
+          }
+          return resp.json();
+        })
+      );
+      if (states.some(task => task.status === 'MISSING')) {
+        setBatchStatus(`${session.label} stopped because some tasks were cleared before the report was sent.`, 8000);
+        session.sent = true;
+        telegramSessions.delete(sessionId);
+        return;
+      }
+      const done = states.filter(task => TERMINAL_STATUSES.has(task.status)).length;
+
+      if (done === session.taskIds.length) {
+        await sendTelegramSessionReport(session, states);
+        session.sent = true;
+        telegramSessions.delete(sessionId);
+        return;
+      }
+
+      setBatchStatus(`${session.label}: processing ${done}/${session.taskIds.length} tasks...`);
+      scheduleTelegramSessionCheck(session, SESSION_POLL_MS);
+    } catch (e) {
+      console.error('Telegram session wait error:', e);
+      setBatchStatus(`${session.label}: waiting for task completion...`);
+      scheduleTelegramSessionCheck(session, SESSION_POLL_MS);
+    } finally {
+      session.checking = false;
+    }
+  }
+
   // ── Data Loaders ──────────────────────────────────────────────────────────
 
   async function loadHealth() {
@@ -557,6 +1055,7 @@
 
   async function loadTasks() {
     const tasks = await fetch(`${API}/tasks`).then(r => r.json());
+    syncReplayedDeadTaskStates(tasks);
     const badge = document.getElementById('task-count-badge');
     badge.textContent = `${tasks.length} task${tasks.length !== 1 ? 's' : ''}`;
 
@@ -614,6 +1113,7 @@
         throw new Error(payload.detail || `HTTP ${resp.status}`);
       }
       const tasks = Array.isArray(payload) ? payload : [];
+      rememberDeadTasks(tasks);
       document.getElementById('dlq-count').textContent = `${tasks.length} dead`;
 
       const tbody = document.getElementById('dlq-table');
@@ -622,29 +1122,70 @@
         return;
       }
       tbody.innerHTML = tasks.map(t => {
-        const history = (t.retry_history || []).map(r =>
-          `<div class="retry-row">Retry ${r.retry_count}: ${r.reason || 'unknown'} @ ${fmtTime(r.scheduled_at)}</div>`
-        ).join('') || '<div class="retry-row">No retry history</div>';
+        const safeTaskId = escapeHtml(t.task_id);
+        const safeError = escapeHtml(t.error_message || '—');
+        const safePayload = escapeHtml(formatJsonBlock(t.payload || {}));
+        const safeShortId = escapeHtml(truncateMiddle(t.task_id, 8, 4));
+        const safeErrorSummary = escapeHtml(summarizeText(t.error_message || '—', 105));
+        const detailCards = [
+          ['Full Task ID', t.task_id],
+          ['Worker', (t.worker_id || '—').replace('local-', '')],
+          ['Created', fmtTime(t.created_at)],
+          ['Started', fmtTime(t.started_at)],
+          ['Died At', fmtTime(t.completed_at)],
+          ['Last Updated', fmtTime(t.last_updated)],
+          ['Retries Used', `${t.retry_count}/${t.max_retries}`],
+          ['Timeout', `${t.timeout_seconds || 8}s`],
+        ].map(([label, value]) => `
+          <div class="detail-card">
+            <div class="detail-label">${escapeHtml(label)}</div>
+            <div class="detail-value">${escapeHtml(String(value ?? '—'))}</div>
+          </div>
+        `).join('');
+        const history = (t.retry_history || []).map(r => `
+          <div class="retry-row">
+            <strong>Retry ${escapeHtml(String(r.retry_count))}</strong> at ${escapeHtml(fmtTime(r.scheduled_at))}
+            <div class="retry-reason">${escapeHtml(r.reason || 'unknown')}</div>
+          </div>
+        `).join('') || '<div class="retry-row">No retry history</div>';
 
         return `
           <tr>
-            <td class="mono">${t.task_id.slice(0, 8)}…</td>
+            <td class="mono">
+              <div class="dlq-task-main">
+                <span class="dlq-task-id" title="${safeTaskId}">${safeShortId}</span>
+                <span class="dlq-task-sub">Full ID: ${safeTaskId}</span>
+              </div>
+            </td>
             <td>${t.task_type}</td>
             <td style="text-align:center">${t.priority}</td>
             <td>${t.retry_count}/${t.max_retries}</td>
-            <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:#f87171" title="${t.error_message||''}">
-              ${t.error_message || '—'}
+            <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:#f87171" title="${safeError}">
+              ${safeErrorSummary}
             </td>
             <td>${fmtTime(t.completed_at)}</td>
             <td>
               <button class="btn btn-warning btn-sm" onclick="replaySingle('${t.task_id}')">↩ Replay</button>
             </td>
           </tr>
-          <tr><td colspan="7"><div class="retry-history">${history}</div></td></tr>
+          <tr>
+            <td colspan="7">
+              <div class="retry-history">
+                <div class="dlq-details-grid">${detailCards}</div>
+                <div class="detail-section-label">Last Error</div>
+                <div class="error-block">${safeError}</div>
+                <div class="detail-section-label">Payload Snapshot</div>
+                <pre class="payload-preview mono">${safePayload}</pre>
+                <div class="detail-section-label">Retry Timeline</div>
+                ${history}
+              </div>
+            </td>
+          </tr>
         `;
       }).join('');
     } catch (e) {
       console.error('DLQ load error:', e);
+      rememberDeadTasks([]);
       document.getElementById('dlq-count').textContent = 'DLQ error';
       document.getElementById('dlq-table').innerHTML =
         '<tr><td colspan="7" class="empty-state">Could not load dead tasks. Check the API logs.</td></tr>';
@@ -655,9 +1196,8 @@
 
   async function submitBatch(count = 10) {
     const btn  = document.getElementById('btn-batch');
-    const status = document.getElementById('batch-status');
     btn.disabled = true;
-    status.textContent = `Submitting ${count} tasks...`;
+    setBatchStatus(`Submitting ${count} tasks...`);
 
     let submitted = 0;
     const submittedTaskIds = [];
@@ -680,75 +1220,46 @@
           if (data.task_id) submittedTaskIds.push(data.task_id);
         }
         submitted++;
-        status.textContent = `Submitted ${submitted}/${count}...`;
+        setBatchStatus(`Submitted ${submitted}/${count}...`);
       } catch (e) {
-        status.textContent = `Error at task ${i + 1}: ${e}`;
+        setBatchStatus(`Error at task ${i + 1}: ${e}`, 6000);
         break;
       }
     }
 
     btn.disabled = false;
-    status.textContent = `✓ ${submitted} tasks submitted. Waiting for completion...`;
     await refresh();
-
     if (submittedTaskIds.length > 0) {
-      await waitForTerminalAndSendReport(submittedTaskIds);
+      addTasksToTelegramSession(submittedTaskIds);
+    } else {
+      setBatchStatus('No tasks were submitted.', 4000);
     }
-  }
-
-  async function waitForTerminalAndSendReport(taskIds) {
-    const status = document.getElementById('batch-status');
-    const terminal = new Set(['COMPLETED', 'DEAD', 'FAILED', 'CANCELLED']);
-    const maxAttempts = 200;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        const states = await Promise.all(
-          taskIds.map(id => fetch(`${API}/tasks/${id}`).then(r => r.json()))
-        );
-        const done = states.filter(t => terminal.has(t.status)).length;
-        status.textContent = `Processing ${done}/${taskIds.length} tasks...`;
-
-        if (done === taskIds.length) {
-          const reportResp = await fetch(`${API}/reports/telegram/for-tasks`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              task_ids: taskIds,
-              title: 'Dashboard Batch Completion Report'
-            }),
-          });
-          const report = await reportResp.json();
-          if (reportResp.ok && report.sent) {
-            status.textContent = `📨 Report sent to Telegram. Completed ${report.completed}/${report.total}`;
-          } else if (reportResp.ok) {
-            status.textContent = `Batch done, but Telegram not sent: ${report.message}`;
-          } else {
-            status.textContent = `Batch done, report send failed: ${report.detail || 'unknown error'}`;
-          }
-          setTimeout(() => status.textContent = '', 6000);
-          await refresh();
-          return;
-        }
-      } catch (e) {
-        status.textContent = `Waiting for completion... (${attempt})`;
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 3000));
-    }
-
-    status.textContent = 'Timed out waiting for task completion. Telegram report not sent.';
-    setTimeout(() => status.textContent = '', 6000);
   }
 
   async function replaySingle(taskId) {
     try {
-      await fetch(`${API}/tasks/${taskId}/retry`, { method: 'POST' });
-      document.getElementById('batch-status').textContent = `↩ Task ${taskId.slice(0,8)}… re-queued`;
-      setTimeout(() => document.getElementById('batch-status').textContent = '', 3000);
+      const resp = await fetch(`${API}/tasks/${taskId}/retry`, { method: 'POST' });
+      const payload = await resp.json();
+      if (!resp.ok) {
+        throw new Error(payload.detail || `HTTP ${resp.status}`);
+      }
+
+      const knownTask = latestDeadTasks.get(taskId) || { task_id: taskId };
+      trackReplayedDeadTask(knownTask);
+      setBatchStatus(`Replay queued for dead task ${truncateMiddle(taskId, 8, 4)}. Watching its retry progress...`, 5000);
+      showToast(
+        'Dead task replay queued',
+        [
+          `Task ID: ${taskId}`,
+          formatTaskMeta(knownTask) || 'Waiting for worker pickup...',
+        ].join('\n'),
+        'warning',
+        8000
+      );
       await refresh();
     } catch (e) {
-      document.getElementById('batch-status').textContent = `Error: ${e}`;
+      setBatchStatus(`Replay failed: ${e}`, 7000);
+      showToast('Dead task replay failed', String(e), 'danger', 9000);
     }
   }
 
@@ -763,8 +1274,7 @@
       }
       const dead = Array.isArray(deadPayload) ? deadPayload : [];
       if (!dead.length) {
-        document.getElementById('batch-status').textContent = 'No dead tasks to replay.';
-        setTimeout(() => document.getElementById('batch-status').textContent = '', 3000);
+        setBatchStatus('No dead tasks to replay.', 3000);
         return;
       }
       const ids = dead.map(t => t.task_id);
@@ -777,11 +1287,51 @@
       if (!replayResp.ok) {
         throw new Error(res.detail || `HTTP ${replayResp.status}`);
       }
-      document.getElementById('batch-status').textContent = `↩ Replayed ${res.replayed} tasks (${res.skipped} skipped)`;
-      setTimeout(() => document.getElementById('batch-status').textContent = '', 4000);
+      const replayedTasks = dead.filter(task => (res.replayed_ids || []).includes(task.task_id));
+      trackReplayedDeadTasks(replayedTasks);
+      const previewIds = replayedTasks.slice(0, 3).map(task => task.task_id);
+      const moreCount = Math.max(0, replayedTasks.length - previewIds.length);
+      setBatchStatus(`Replayed ${res.replayed} dead tasks (${res.skipped} skipped). Tracking their retries...`, 6000);
+      showToast(
+        'Dead tasks replay queued',
+        [
+          `Replayed: ${res.replayed}`,
+          `Skipped: ${res.skipped}`,
+          previewIds.length ? `Task IDs:\n${previewIds.join('\n')}${moreCount ? `\n+${moreCount} more` : ''}` : '',
+        ].filter(Boolean).join('\n'),
+        'warning',
+        9500
+      );
       await refresh();
     } catch (e) {
-      document.getElementById('batch-status').textContent = `Error: ${e}`;
+      setBatchStatus(`Batch replay failed: ${e}`, 7000);
+      showToast('Dead task batch replay failed', String(e), 'danger', 9500);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function simulateWorkerFault() {
+    const btn = document.getElementById('btn-simulate-fault');
+    btn.disabled = true;
+    try {
+      const resp = await fetch(`${API}/faults/simulate-worker-crash`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const payload = await resp.json();
+      if (!resp.ok) {
+        throw new Error(payload.detail || `HTTP ${resp.status}`);
+      }
+
+      const target = payload.target_task_id
+        ? ` on ${payload.worker_id} while task ${payload.target_task_id.slice(0, 8)}… was running`
+        : ` on idle worker ${payload.worker_id}`;
+      setBatchStatus(`☠️ Simulated worker fault queued${target}. Wait ~15-20s for recovery.`, 9000);
+      await refresh();
+    } catch (e) {
+      setBatchStatus(`Fault simulation failed: ${e}`, 7000);
     } finally {
       btn.disabled = false;
     }
@@ -794,13 +1344,14 @@
     closeModal();
     prevCompleted = 0;
     tpsData.fill(0); lagData.fill(0);
+    resetTelegramSessions();
+    resetReplayTracking();
     try {
       const d = await fetch(`${API}/tasks/clear`, { method: 'DELETE' }).then(r => r.json());
-      document.getElementById('batch-status').textContent = `✓ Cleared ${d.deleted} tasks`;
-      setTimeout(() => document.getElementById('batch-status').textContent = '', 4000);
+      setBatchStatus(`Cleared ${d.deleted} tasks`, 4000);
       await refresh();
     } catch (e) {
-      document.getElementById('batch-status').textContent = `Error: ${e}`;
+      setBatchStatus(`Clear failed: ${e}`, 7000);
     }
   }
 

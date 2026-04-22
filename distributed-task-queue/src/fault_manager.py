@@ -46,8 +46,10 @@ class FaultToleranceManager:
                         logger.warning(msg)
                         self.db.log_event("worker_dead_detected", msg, task_id=task_id, worker_id=worker_id)
 
-                        if not self.broker.acquire_task_lock(task_id, "fault-manager", ttl_seconds=60):
-                            continue
+                        # A crashed worker can leave a stale task lock behind.
+                        # Take over the lock immediately so recovery is visible
+                        # during a live demo instead of waiting for lock expiry.
+                        self.db.force_acquire_task_lock(task_id, "fault-manager", ttl_seconds=60)
 
                         try:
                             latest = self.db.get_task(task_id)
