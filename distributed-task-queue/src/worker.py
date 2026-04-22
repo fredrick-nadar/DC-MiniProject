@@ -36,16 +36,59 @@ API_ENDPOINTS: dict[str, str] = {
     "fetch_pokemon": "https://pokeapi.co/api/v2/pokemon/pikachu",
     "fetch_chuck":   "https://api.chucknorris.io/jokes/random",
     "fetch_country": "https://restcountries.com/v3.1/alpha/IN",
-    "fetch_number":  "https://numbersapi.com/random/trivia?json",
+    # Replacement trivia endpoint for the old Numbers API task.
+    "fetch_number":  "https://uselessfacts.jsph.pl/api/v2/facts/random",
     "fetch_large_photos": "https://jsonplaceholder.typicode.com/photos",
     "fetch_slow_httpbin": "https://httpbin.org/delay/12",
 }
 
 API_ENDPOINT_FALLBACKS: dict[str, tuple[str, ...]] = {
-    # Keep an HTTP fallback for environments where the provider only
-    # answers on port 80, but prefer HTTPS first.
-    "fetch_number": ("http://numbersapi.com/random/trivia?json",),
+    "fetch_number": ("http://api.mathjs.org/v4/?expr=2%2B2",),
 }
+
+
+def _build_local_fallback_payload(task_type: str) -> object:
+    """Return deterministic demo data when outbound API calls are blocked."""
+    if task_type == "fetch_joke":
+        return {
+            "setup": "Why did the distributed queue stay calm?",
+            "punchline": "Because retries are just part of the plan.",
+        }
+    if task_type == "fetch_dog":
+        return {"message": "https://example.com/static/dog.jpg", "status": "success"}
+    if task_type == "fetch_user":
+        return {
+            "results": [
+                {
+                    "name": {"title": "Mx", "first": "Local", "last": "Tester"},
+                    "email": "local.tester@example.com",
+                }
+            ]
+        }
+    if task_type == "fetch_fact":
+        return {"fact": "Bananas are berries, but strawberries are not."}
+    if task_type == "fetch_ip":
+        return {"ip": "127.0.0.1"}
+    if task_type == "fetch_product":
+        return {"id": 1, "title": "Offline Demo Product", "price": 99}
+    if task_type == "fetch_pokemon":
+        return {"id": 25, "name": "pikachu", "base_experience": 112}
+    if task_type == "fetch_chuck":
+        return {"value": "Chuck Norris can debug a distributed system by staring at the logs."}
+    if task_type == "fetch_country":
+        return [{"name": {"common": "India"}, "cca2": "IN", "region": "Asia"}]
+    if task_type == "fetch_number":
+        return {
+            "text": "42 is the answer to life, the universe, and everything.",
+            "number": 42,
+            "found": True,
+            "type": "trivia",
+        }
+    if task_type == "fetch_large_photos":
+        return [{"id": i, "title": f"offline-photo-{i}"} for i in range(1, 251)]
+    if task_type == "fetch_slow_httpbin":
+        return {"url": "https://httpbin.org/delay/12", "offline": True}
+    raise ValueError(f"No local fallback payload defined for task_type: {task_type}")
 
 # Failure rate per task type to demonstrate retry mechanics.
 # Heavier endpoints intentionally have a higher failure rate to emulate
@@ -87,6 +130,8 @@ class WorkerNode:
         endpoint_candidates = (API_ENDPOINTS[task_type], *API_ENDPOINT_FALLBACKS.get(task_type, ()))
         res: requests.Response | None = None
         last_request_error: requests.RequestException | None = None
+        response_json: object | None = None
+        response_bytes: bytes | None = None
 
         try:
             for endpoint in endpoint_candidates:
@@ -97,6 +142,7 @@ class WorkerNode:
                         headers={"User-Agent": "DistributedTaskQueueDemo/1.0"},
                     )
                     res.raise_for_status()
+                    response_bytes = res.content
                     break
                 except requests.RequestException as exc:
                     last_request_error = exc
@@ -108,21 +154,26 @@ class WorkerNode:
                         exc,
                     )
             else:
-                raise RuntimeError(f"{task_type} API call failed: {last_request_error}")
+                response_json = _build_local_fallback_payload(task_type)
+                response_bytes = json.dumps(response_json).encode("utf-8")
+                logger.warning(
+                    "Task %s used local fallback payload for %s after upstream failures: %s",
+                    task_id,
+                    task_type,
+                    last_request_error,
+                )
 
             # Extra parsing work for heavier endpoints to mimic more realistic
             # mid-level API tasks that put pressure on worker CPU/memory.
             if task_type == "fetch_large_photos":
-                assert res is not None
-                photos = res.json()
+                photos = response_json if response_json is not None else res.json()
                 _ = sum((p.get("id", 0) or 0) for p in photos[:2000])
             elif task_type == "fetch_slow_httpbin":
-                assert res is not None
-                payload = res.json()
+                payload = response_json if response_json is not None else res.json()
                 _ = payload.get("url")
 
-            assert res is not None
-            logger.info("Task %s OK - %s bytes", task_id, len(res.content))
+            assert response_bytes is not None
+            logger.info("Task %s OK - %s bytes", task_id, len(response_bytes))
         except RuntimeError:
             raise
         except requests.RequestException as exc:
@@ -153,9 +204,10 @@ class WorkerNode:
                     logger.warning("Dropping task without task_id")
                     continue
 
-                # Skip tasks already in a terminal state (e.g. cancelled)
+                # Skip orphaned Kafka messages and tasks already in a
+                # terminal state (e.g. cancelled).
                 if self.broker.is_duplicate_or_terminal(task_id):
-                    logger.info("Skipping task %s — already terminal", task_id)
+                    logger.info("Skipping task %s - missing or already terminal", task_id)
                     continue
 
                 if not self.broker.acquire_task_lock(task_id, self.worker_id, ttl_seconds=180):

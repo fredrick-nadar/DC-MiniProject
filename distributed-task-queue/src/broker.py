@@ -223,7 +223,9 @@ class KafkaBroker:
     def is_duplicate_or_terminal(self, task_id: str) -> bool:
         task = self.db.get_task(task_id)
         if not task:
-            return False
+            # If Kafka still contains an old message for a task that no longer
+            # exists in SQLite, treat it as orphaned and skip processing.
+            return True
         return task["status"] in TERMINAL_STATUSES
 
     # ------------------------------------------------------------------
