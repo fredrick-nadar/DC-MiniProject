@@ -71,16 +71,6 @@ Open `dashboard/index.html` in your browser. Click **"Submit Batch"** to enqueue
 python load_test.py --tasks 100 --duration 90
 ```
 
-### 6. Send Final Reports to Telegram
-See `TELEGRAM_REPORT_README.md` for full bot setup and end-report delivery from:
-- `load_test.py` (automatic if Telegram env vars are set)
-- `test_system.py --telegram`
-
-### 7. Realistic Stress Task Types
-The queue includes heavier/slower APIs for more realistic failure scenarios:
-- `fetch_large_photos` (large JSON payload parsing)
-- `fetch_slow_httpbin` (slow endpoint, can timeout with lower task timeout values)
-
 ## 📐 Partitioning & Scaling Strategy
 
 The Kafka topic `tasks.queue` has **3 partitions** mapped to priority bands:
